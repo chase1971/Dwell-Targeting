@@ -1,0 +1,16 @@
+# Build output
+bin/
+obj/
+out/
+
+# IDE
+.vs/
+*.user
+*.suo
+
+# OS
+Thumbs.db
+Desktop.ini
+
+# Local settings / logs (not source)
+settings.json

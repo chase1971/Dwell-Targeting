@@ -1,0 +1,302 @@
+using Godot;
+using MegaCrit.Sts2.Core.Nodes.CommonUi;
+using MegaCrit.Sts2.Core.Nodes.Rewards;
+using MegaCrit.Sts2.Core.Nodes.Screens;
+
+namespace DwellTargeting;
+
+/// <summary>
+/// Numbered dwell buttons beside loot/reward choices and Skip.
+/// </summary>
+internal static class RewardsOverlay
+{
+    private const int ButtonGap = 8;
+    private const int ButtonSize = 44;
+    private const int CanvasLayerOrder = 130;
+    private const int SideOffset = 72;
+
+    private static CanvasLayer? _layer;
+    private static Control? _root;
+    private static readonly Dictionary<ulong, RewardSideButton> _sideButtons = new();
+
+    internal static void Sync()
+    {
+        var tree = Engine.GetMainLoop() as SceneTree;
+        if (tree?.Root == null)
+        {
+            Hide();
+            return;
+        }
+
+        var rewardsScreen = NodeQuery.FindAll<NRewardsScreen>(tree.Root)
+            .FirstOrDefault(NodeQuery.IsVisible);
+        if (rewardsScreen == null)
+        {
+            Hide();
+            return;
+        }
+
+        EnsureCanvas();
+        if (_root == null)
+            return;
+
+        _root.Visible = true;
+
+        var rewardButtons = NodeQuery.FindAll<NRewardButton>(rewardsScreen)
+            .Where(NodeQuery.IsVisible)
+            .OrderBy(b => b.GlobalPosition.Y)
+            .ThenBy(b => b.GlobalPosition.X)
+            .ToList();
+
+        var liveIds = new HashSet<ulong>();
+        int slot = 1;
+        foreach (var reward in rewardButtons)
+        {
+            ulong id = reward.GetInstanceId();
+            liveIds.Add(id);
+
+            if (!_sideButtons.TryGetValue(id, out var side))
+            {
+                side = new RewardSideButton(reward, _root);
+                _sideButtons[id] = side;
+                ModLogger.Info($"Reward side button {slot} for {reward.Name}.");
+            }
+
+            side.Sync(slot, ButtonSize);
+            slot++;
+        }
+
+        foreach (var proceed in NodeQuery.FindAll<NProceedButton>(rewardsScreen).Where(NodeQuery.IsVisible))
+        {
+            ulong id = proceed.GetInstanceId();
+            if (liveIds.Contains(id))
+                continue;
+
+            liveIds.Add(id);
+
+            if (!_sideButtons.TryGetValue(id, out var side))
+            {
+                side = new RewardSideButton(proceed, _root);
+                _sideButtons[id] = side;
+                ModLogger.Info($"Proceed side button for {proceed.Name}.");
+            }
+
+            side.Sync("SKIP", ButtonSize);
+        }
+
+        foreach (var pair in _sideButtons.ToList())
+        {
+            if (!liveIds.Contains(pair.Key))
+            {
+                pair.Value.Dispose();
+                _sideButtons.Remove(pair.Key);
+            }
+        }
+
+        var dwellTargets = new List<DwellHoverService.Target>();
+        CollectDwellTargets(dwellTargets);
+        DwellHoverService.ProcessFrame(dwellTargets, GetProcessDelta());
+    }
+
+    internal static void Hide()
+    {
+        foreach (var side in _sideButtons.Values)
+            side.Dispose();
+        _sideButtons.Clear();
+
+        if (_root != null && NodeQuery.IsLive(_root))
+            _root.Visible = false;
+    }
+
+    internal static bool TryRouteClick(Vector2 globalPos, out string message)
+    {
+        message = string.Empty;
+        foreach (var side in _sideButtons.Values)
+        {
+            if (side.TryActivateAt(globalPos, out message))
+                return true;
+        }
+
+        return false;
+    }
+
+    internal static bool TryHitDwellButton(Vector2 globalPos, out string message)
+    {
+        message = string.Empty;
+        foreach (var side in _sideButtons.Values)
+        {
+            if (side.TryHitAt(globalPos, out message))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static void CollectDwellTargets(List<DwellHoverService.Target> targets)
+    {
+        foreach (var side in _sideButtons.Values)
+            side.CollectDwellTargets(targets);
+    }
+
+    private static double GetProcessDelta()
+    {
+        var tree = Engine.GetMainLoop() as SceneTree;
+        return tree?.Root?.GetProcessDeltaTime() ?? (1.0 / 60.0);
+    }
+
+    private static void EnsureCanvas()
+    {
+        if (_layer != null && NodeQuery.IsLive(_layer) && _root != null && NodeQuery.IsLive(_root))
+            return;
+
+        var tree = Engine.GetMainLoop() as SceneTree;
+        if (tree?.Root == null)
+            return;
+
+        _layer = new CanvasLayer { Layer = CanvasLayerOrder, Name = "DwellRewardsLayer" };
+        tree.Root.AddChild(_layer);
+
+        _root = new Control
+        {
+            Name = "DwellRewardsRoot",
+            MouseFilter = Control.MouseFilterEnum.Ignore
+        };
+        _root.SetAnchorsPreset(Control.LayoutPreset.FullRect);
+        _layer.AddChild(_root);
+        ModLogger.Info("Rewards overlay canvas created.");
+    }
+
+    private sealed class RewardSideButton
+    {
+        private readonly Control _target;
+        private readonly Control _host;
+        private Button? _button;
+        private string _label = "?";
+
+        internal RewardSideButton(Control target, Control root)
+        {
+            _target = target;
+            _host = new Control
+            {
+                Name = $"DwellRewardSide_{target.GetInstanceId()}",
+                MouseFilter = Control.MouseFilterEnum.Ignore,
+                ZIndex = 200
+            };
+            root.AddChild(_host);
+        }
+
+        internal void Sync(int slot, int buttonSize) => Sync(slot.ToString(), buttonSize);
+
+        internal void Sync(string label, int buttonSize)
+        {
+            _label = label;
+            EnsureButton(buttonSize);
+            PositionButton();
+        }
+
+        internal void CollectDwellTargets(List<DwellHoverService.Target> targets)
+        {
+            if (_button == null || !NodeQuery.IsLive(_button) || !_button.Visible)
+                return;
+
+            var rect = _button.GetGlobalRect();
+            targets.Add(new DwellHoverService.Target(rect, Activate, $"Reward:{_label}"));
+        }
+
+        internal bool TryHitAt(Vector2 globalPos, out string message) =>
+            TryActivateAt(globalPos, out message, activate: false);
+
+        internal bool TryActivateAt(Vector2 globalPos, out string message) =>
+            TryActivateAt(globalPos, out message, activate: true);
+
+        private bool TryActivateAt(Vector2 globalPos, out string message, bool activate)
+        {
+            message = string.Empty;
+            if (_button == null || !NodeQuery.IsLive(_button) || !_button.Visible)
+                return false;
+
+            if (!_button.GetGlobalRect().HasPoint(globalPos))
+                return false;
+
+            message = activate ? $"Reward side '{_label}' activated" : $"Hit reward side '{_label}'";
+            if (activate)
+                Activate();
+
+            return true;
+        }
+
+        private void Activate()
+        {
+            ModLogger.Info($"Reward side button '{_label}'");
+            if (!NodeQuery.IsLive(_target))
+                return;
+
+            var rect = _target.GetGlobalRect();
+            InputForwardService.Click(rect.GetCenter(), MouseButton.Left);
+        }
+
+        internal void Dispose()
+        {
+            if (NodeQuery.IsLive(_host))
+                _host.QueueFree();
+            _button = null;
+        }
+
+        private void EnsureButton(int buttonSize)
+        {
+            if (_button != null && NodeQuery.IsLive(_button))
+            {
+                _button.Text = _label;
+                _button.CustomMinimumSize = new Vector2(buttonSize, buttonSize);
+                _button.Visible = true;
+                return;
+            }
+
+            int fontSize = Math.Max(12, buttonSize / 2);
+            _button = new Button
+            {
+                Text = _label,
+                CustomMinimumSize = new Vector2(buttonSize, buttonSize),
+                FocusMode = Control.FocusModeEnum.None,
+                MouseFilter = Control.MouseFilterEnum.Stop,
+                ZIndex = 2
+            };
+
+            var style = new StyleBoxFlat
+            {
+                BgColor = new Color(0.08f, 0.1f, 0.14f, 0.95f),
+                BorderColor = new Color(0.45f, 0.85f, 1f, 1f),
+                BorderWidthBottom = 2,
+                BorderWidthTop = 2,
+                BorderWidthLeft = 2,
+                BorderWidthRight = 2,
+                CornerRadiusBottomLeft = 8,
+                CornerRadiusBottomRight = 8,
+                CornerRadiusTopLeft = 8,
+                CornerRadiusTopRight = 8
+            };
+            _button.AddThemeStyleboxOverride("normal", style);
+            _button.AddThemeStyleboxOverride("hover", style);
+            _button.AddThemeStyleboxOverride("pressed", style);
+            _button.AddThemeStyleboxOverride("focus", style);
+            _button.AddThemeFontSizeOverride("font_size", fontSize);
+            _button.Pressed += Activate;
+            _host.AddChild(_button);
+        }
+
+        private void PositionButton()
+        {
+            if (_button == null || !NodeQuery.IsLive(_target))
+                return;
+
+            var targetRect = _target.GetGlobalRect();
+            _button.ResetSize();
+            var size = _button.GetCombinedMinimumSize();
+            float x = targetRect.Position.X - SideOffset - size.X;
+            float y = targetRect.Position.Y + ((targetRect.Size.Y - size.Y) / 2f);
+            _button.GlobalPosition = new Vector2(x, y);
+            _button.Size = size;
+            _button.Visible = true;
+        }
+    }
+}
