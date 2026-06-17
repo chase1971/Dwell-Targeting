@@ -15,6 +15,17 @@ internal sealed class DwellSettings
     public const float MinOpacity = 0.25f;
     public const float MaxOpacity = 1f;
 
+    public const float MinDwellSeconds = 0.2f;
+    public const float MaxDwellSeconds = 3f;
+    public const float DefaultCardDwellSeconds = 0.5f;
+    public const float DefaultEndTurnDwellSeconds = 1.15f;
+
+    [JsonPropertyName("cardDwellSeconds")]
+    public float CardDwellSeconds { get; set; } = DefaultCardDwellSeconds;
+
+    [JsonPropertyName("endTurnDwellSeconds")]
+    public float EndTurnDwellSeconds { get; set; } = DefaultEndTurnDwellSeconds;
+
     [JsonPropertyName("hideEndTurnButton")]
     public bool HideEndTurnButton { get; set; }
 
@@ -29,9 +40,6 @@ internal sealed class DwellSettings
 
     [JsonPropertyName("actionButtonScale")]
     public float ActionButtonScale { get; set; } = 1f;
-
-    [JsonPropertyName("utilityButtonScale")]
-    public float UtilityButtonScale { get; set; } = 1f;
 
     [JsonPropertyName("cardButtonOpacity")]
     public float CardButtonOpacity { get; set; } = 0.95f;
@@ -56,4 +64,10 @@ internal sealed class DwellSettings
 
     [JsonPropertyName("showMenuButton")]
     public bool ShowMenuButton { get; set; } = true;
+
+    [JsonPropertyName("showEnemyLabels")]
+    public bool ShowEnemyLabels { get; set; } = true;
+
+    [JsonPropertyName("enablePerfLogging")]
+    public bool EnablePerfLogging { get; set; }
 }

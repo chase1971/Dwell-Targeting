@@ -5,7 +5,6 @@ namespace DwellTargeting;
 internal static class SettingsStore
 {
     private const int BaseActionButtonSize = 110;
-    private const int BaseUtilityButtonSize = 88;
 
     private static readonly string SettingsDir = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
@@ -61,14 +60,17 @@ internal static class SettingsStore
     internal static int GetActionButtonSize() =>
         ScaleMenuSize(BaseActionButtonSize, _current.ActionButtonScale);
 
-    internal static int GetUtilityButtonSize() =>
-        ScaleMenuSize(BaseUtilityButtonSize, _current.UtilityButtonScale);
-
     internal static float GetCardButtonOpacity() =>
         Math.Clamp(_current.CardButtonOpacity, DwellSettings.MinOpacity, DwellSettings.MaxOpacity);
 
     internal static float GetMenuButtonOpacity() =>
         Math.Clamp(_current.MenuButtonOpacity, DwellSettings.MinOpacity, DwellSettings.MaxOpacity);
+
+    internal static float GetCardDwellSeconds() =>
+        Math.Clamp(_current.CardDwellSeconds, DwellSettings.MinDwellSeconds, DwellSettings.MaxDwellSeconds);
+
+    internal static float GetEndTurnDwellSeconds() =>
+        Math.Clamp(_current.EndTurnDwellSeconds, DwellSettings.MinDwellSeconds, DwellSettings.MaxDwellSeconds);
 
     internal static void SetHideEndTurnButton(bool value) =>
         ApplyHideEndTurnButton(value, persist: true, syncModConfig: true);
@@ -88,8 +90,11 @@ internal static class SettingsStore
     internal static void ApplyActionButtonScale(float value, bool persist = true, bool syncModConfig = true) =>
         ApplyFloat(v => _current.ActionButtonScale = v, _current.ActionButtonScale, value, DwellSettings.MenuMinScale, DwellSettings.MenuMaxScale, "actionButtonScale", persist, syncModConfig);
 
-    internal static void ApplyUtilityButtonScale(float value, bool persist = true, bool syncModConfig = true) =>
-        ApplyFloat(v => _current.UtilityButtonScale = v, _current.UtilityButtonScale, value, DwellSettings.MenuMinScale, DwellSettings.MenuMaxScale, "utilityButtonScale", persist, syncModConfig);
+    internal static void ApplyCardDwellSeconds(float value, bool persist = true, bool syncModConfig = true) =>
+        ApplyFloat(v => _current.CardDwellSeconds = v, _current.CardDwellSeconds, value, DwellSettings.MinDwellSeconds, DwellSettings.MaxDwellSeconds, "cardDwellSeconds", persist, syncModConfig);
+
+    internal static void ApplyEndTurnDwellSeconds(float value, bool persist = true, bool syncModConfig = true) =>
+        ApplyFloat(v => _current.EndTurnDwellSeconds = v, _current.EndTurnDwellSeconds, value, DwellSettings.MinDwellSeconds, DwellSettings.MaxDwellSeconds, "endTurnDwellSeconds", persist, syncModConfig);
 
     internal static void ApplyCardButtonOpacity(float value, bool persist = true, bool syncModConfig = true) =>
         ApplyFloat(v => _current.CardButtonOpacity = v, _current.CardButtonOpacity, value, DwellSettings.MinOpacity, DwellSettings.MaxOpacity, "cardButtonOpacity", persist, syncModConfig);
@@ -114,6 +119,12 @@ internal static class SettingsStore
 
     internal static void ApplyShowMenuButton(bool value, bool persist = true, bool syncModConfig = true) =>
         ApplyBool(v => _current.ShowMenuButton = v, _current.ShowMenuButton, value, "showMenuButton", persist, syncModConfig);
+
+    internal static void ApplyShowEnemyLabels(bool value, bool persist = true, bool syncModConfig = true) =>
+        ApplyBool(v => _current.ShowEnemyLabels = v, _current.ShowEnemyLabels, value, "showEnemyLabels", persist, syncModConfig);
+
+    internal static void ApplyEnablePerfLogging(bool value, bool persist = true, bool syncModConfig = true) =>
+        ApplyBool(v => _current.EnablePerfLogging = v, _current.EnablePerfLogging, value, "enablePerfLogging", persist, syncModConfig);
 
     internal static void RestoreDefaults()
     {
@@ -187,9 +198,10 @@ internal static class SettingsStore
     {
         _current.CardButtonScale = Math.Clamp(_current.CardButtonScale, DwellSettings.CardMinScale, DwellSettings.CardMaxScale);
         _current.ActionButtonScale = Math.Clamp(_current.ActionButtonScale, DwellSettings.MenuMinScale, DwellSettings.MenuMaxScale);
-        _current.UtilityButtonScale = Math.Clamp(_current.UtilityButtonScale, DwellSettings.MenuMinScale, DwellSettings.MenuMaxScale);
         _current.CardButtonOpacity = Math.Clamp(_current.CardButtonOpacity, DwellSettings.MinOpacity, DwellSettings.MaxOpacity);
         _current.MenuButtonOpacity = Math.Clamp(_current.MenuButtonOpacity, DwellSettings.MinOpacity, DwellSettings.MaxOpacity);
+        _current.CardDwellSeconds = Math.Clamp(_current.CardDwellSeconds, DwellSettings.MinDwellSeconds, DwellSettings.MaxDwellSeconds);
+        _current.EndTurnDwellSeconds = Math.Clamp(_current.EndTurnDwellSeconds, DwellSettings.MinDwellSeconds, DwellSettings.MaxDwellSeconds);
     }
 
     private static void Reload(bool force)

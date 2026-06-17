@@ -19,6 +19,7 @@ internal static class GameOverlayVisibility
 
     private static long _lastCheckTicks;
     private static bool _menuOpen;
+    private const int MenuCheckIntervalMs = 500;
 
     internal static bool ShouldHideOverlays()
     {
@@ -31,7 +32,7 @@ internal static class GameOverlayVisibility
     internal static bool IsBlockingMenuOpen()
     {
         long now = System.Environment.TickCount64;
-        if (now - _lastCheckTicks < 200)
+        if (now - _lastCheckTicks < MenuCheckIntervalMs)
             return _menuOpen;
 
         _lastCheckTicks = now;

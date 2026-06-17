@@ -1,16 +1,17 @@
 using Godot;
 using MegaCrit.Sts2.Core.Nodes.CommonUi;
+using MegaCrit.Sts2.Core.Nodes.GodotExtensions;
 using MegaCrit.Sts2.Core.Nodes.Rewards;
 using MegaCrit.Sts2.Core.Nodes.Screens;
 
 namespace DwellTargeting;
 
 /// <summary>
-/// Numbered dwell buttons beside loot/reward choices and Skip.
+/// Numbered dwell buttons beside loot/reward choices, plus a direct native dwell on the Skip/Proceed
+/// button (same method as the combat utility bar — hover the real button, ForceClick to activate).
 /// </summary>
 internal static class RewardsOverlay
 {
-    private const int ButtonGap = 8;
     private const int ButtonSize = 44;
     private const int CanvasLayerOrder = 130;
     private const int SideOffset = 72;
@@ -18,18 +19,11 @@ internal static class RewardsOverlay
     private static CanvasLayer? _layer;
     private static Control? _root;
     private static readonly Dictionary<ulong, RewardSideButton> _sideButtons = new();
+    private static NProceedButton? _proceedButton;
 
     internal static void Sync()
     {
-        var tree = Engine.GetMainLoop() as SceneTree;
-        if (tree?.Root == null)
-        {
-            Hide();
-            return;
-        }
-
-        var rewardsScreen = NodeQuery.FindAll<NRewardsScreen>(tree.Root)
-            .FirstOrDefault(NodeQuery.IsVisible);
+        var rewardsScreen = OverlayModeService.GetCachedRewardsScreen();
         if (rewardsScreen == null)
         {
             Hide();
@@ -42,12 +36,7 @@ internal static class RewardsOverlay
 
         _root.Visible = true;
 
-        var rewardButtons = NodeQuery.FindAll<NRewardButton>(rewardsScreen)
-            .Where(NodeQuery.IsVisible)
-            .OrderBy(b => b.GlobalPosition.Y)
-            .ThenBy(b => b.GlobalPosition.X)
-            .ToList();
-
+        var rewardButtons = RewardsScreenQuery.GetRewardButtons(rewardsScreen);
         var liveIds = new HashSet<ulong>();
         int slot = 1;
         foreach (var reward in rewardButtons)
@@ -57,32 +46,15 @@ internal static class RewardsOverlay
 
             if (!_sideButtons.TryGetValue(id, out var side))
             {
-                side = new RewardSideButton(reward, _root);
+                side = RewardSideButton.ForReward(reward, _root);
                 _sideButtons[id] = side;
-                ModLogger.Info($"Reward side button {slot} for {reward.Name}.");
             }
 
             side.Sync(slot, ButtonSize);
             slot++;
         }
 
-        foreach (var proceed in NodeQuery.FindAll<NProceedButton>(rewardsScreen).Where(NodeQuery.IsVisible))
-        {
-            ulong id = proceed.GetInstanceId();
-            if (liveIds.Contains(id))
-                continue;
-
-            liveIds.Add(id);
-
-            if (!_sideButtons.TryGetValue(id, out var side))
-            {
-                side = new RewardSideButton(proceed, _root);
-                _sideButtons[id] = side;
-                ModLogger.Info($"Proceed side button for {proceed.Name}.");
-            }
-
-            side.Sync("SKIP", ButtonSize);
-        }
+        _proceedButton = RewardsScreenQuery.GetProceedButton(rewardsScreen);
 
         foreach (var pair in _sideButtons.ToList())
         {
@@ -92,10 +64,20 @@ internal static class RewardsOverlay
                 _sideButtons.Remove(pair.Key);
             }
         }
+    }
 
-        var dwellTargets = new List<DwellHoverService.Target>();
-        CollectDwellTargets(dwellTargets);
-        DwellHoverService.ProcessFrame(dwellTargets, GetProcessDelta());
+    internal static void CollectDwellTargets(List<DwellHoverService.Target> targets)
+    {
+        foreach (var side in _sideButtons.Values)
+            side.CollectDwellTargets(targets);
+
+        if (TryGetProceedRect(out var rect))
+        {
+            targets.Add(DwellHoverService.Menu(
+                rect,
+                ActivateProceed,
+                "NativeProceed:Skip"));
+        }
     }
 
     internal static void Hide()
@@ -103,6 +85,7 @@ internal static class RewardsOverlay
         foreach (var side in _sideButtons.Values)
             side.Dispose();
         _sideButtons.Clear();
+        _proceedButton = null;
 
         if (_root != null && NodeQuery.IsLive(_root))
             _root.Visible = false;
@@ -117,6 +100,15 @@ internal static class RewardsOverlay
                 return true;
         }
 
+        if (TryGetProceedRect(out var rect) && rect.HasPoint(globalPos))
+        {
+            if (!DwellActivationCooldown.TryRunMenuAction(ActivateProceed))
+                return false;
+
+            message = "Native proceed clicked";
+            return true;
+        }
+
         return false;
     }
 
@@ -129,19 +121,45 @@ internal static class RewardsOverlay
                 return true;
         }
 
+        if (TryGetProceedRect(out var rect) && rect.HasPoint(globalPos))
+        {
+            message = "Hit native proceed";
+            return true;
+        }
+
         return false;
     }
 
-    private static void CollectDwellTargets(List<DwellHoverService.Target> targets)
+    internal static bool ContainsPoint(Vector2 globalPos)
     {
         foreach (var side in _sideButtons.Values)
-            side.CollectDwellTargets(targets);
+        {
+            if (side.ContainsPoint(globalPos))
+                return true;
+        }
+
+        return TryGetProceedRect(out var rect) && rect.HasPoint(globalPos);
     }
 
-    private static double GetProcessDelta()
+    private static bool TryGetProceedRect(out Rect2 rect)
     {
-        var tree = Engine.GetMainLoop() as SceneTree;
-        return tree?.Root?.GetProcessDeltaTime() ?? (1.0 / 60.0);
+        rect = default;
+        if (_proceedButton == null || !NodeQuery.IsLive(_proceedButton) || !NodeQuery.IsVisible(_proceedButton))
+            return false;
+
+        if (_proceedButton is NClickableControl { IsEnabled: false })
+            return false;
+
+        rect = _proceedButton.GetGlobalRect();
+        return rect.Size.X >= 8f && rect.Size.Y >= 8f;
+    }
+
+    private static void ActivateProceed()
+    {
+        if (_proceedButton == null || !NodeQuery.IsLive(_proceedButton))
+            return;
+
+        RewardSelectionService.TryProceed(_proceedButton);
     }
 
     private static void EnsureCanvas()
@@ -163,33 +181,33 @@ internal static class RewardsOverlay
         };
         _root.SetAnchorsPreset(Control.LayoutPreset.FullRect);
         _layer.AddChild(_root);
-        ModLogger.Info("Rewards overlay canvas created.");
     }
 
     private sealed class RewardSideButton
     {
-        private readonly Control _target;
+        private readonly NRewardButton? _rewardTarget;
         private readonly Control _host;
         private Button? _button;
         private string _label = "?";
 
-        internal RewardSideButton(Control target, Control root)
+        private RewardSideButton(NRewardButton reward, Control root)
         {
-            _target = target;
+            _rewardTarget = reward;
             _host = new Control
             {
-                Name = $"DwellRewardSide_{target.GetInstanceId()}",
+                Name = $"DwellRewardSide_{reward.GetInstanceId()}",
                 MouseFilter = Control.MouseFilterEnum.Ignore,
                 ZIndex = 200
             };
             root.AddChild(_host);
         }
 
-        internal void Sync(int slot, int buttonSize) => Sync(slot.ToString(), buttonSize);
+        internal static RewardSideButton ForReward(NRewardButton reward, Control root) =>
+            new(reward, root);
 
-        internal void Sync(string label, int buttonSize)
+        internal void Sync(int slot, int buttonSize)
         {
-            _label = label;
+            _label = slot.ToString();
             EnsureButton(buttonSize);
             PositionButton();
         }
@@ -199,9 +217,11 @@ internal static class RewardsOverlay
             if (_button == null || !NodeQuery.IsLive(_button) || !_button.Visible)
                 return;
 
-            var rect = _button.GetGlobalRect();
-            targets.Add(new DwellHoverService.Target(rect, Activate, $"Reward:{_label}"));
+            targets.Add(DwellHoverService.Card(_button.GetGlobalRect(), Activate, $"Reward:{_label}"));
         }
+
+        internal bool ContainsPoint(Vector2 globalPos) =>
+            _button != null && NodeQuery.IsLive(_button) && _button.Visible && _button.GetGlobalRect().HasPoint(globalPos);
 
         internal bool TryHitAt(Vector2 globalPos, out string message) =>
             TryActivateAt(globalPos, out message, activate: false);
@@ -227,12 +247,8 @@ internal static class RewardsOverlay
 
         private void Activate()
         {
-            ModLogger.Info($"Reward side button '{_label}'");
-            if (!NodeQuery.IsLive(_target))
-                return;
-
-            var rect = _target.GetGlobalRect();
-            InputForwardService.Click(rect.GetCenter(), MouseButton.Left);
+            if (_rewardTarget != null && NodeQuery.IsLive(_rewardTarget))
+                RewardSelectionService.TryClaim(_rewardTarget);
         }
 
         internal void Dispose()
@@ -286,10 +302,11 @@ internal static class RewardsOverlay
 
         private void PositionButton()
         {
-            if (_button == null || !NodeQuery.IsLive(_target))
+            Control? anchor = _rewardTarget;
+            if (_button == null || anchor == null || !NodeQuery.IsLive(anchor))
                 return;
 
-            var targetRect = _target.GetGlobalRect();
+            var targetRect = anchor.GetGlobalRect();
             _button.ResetSize();
             var size = _button.GetCombinedMinimumSize();
             float x = targetRect.Position.X - SideOffset - size.X;

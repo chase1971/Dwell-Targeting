@@ -20,6 +20,8 @@ internal static class EndTurnOverlay
     private static Button? _button;
     private static Rect2 _buttonBounds;
     private static int _buttonSize;
+    private static int _lastAppliedFontSize = -1;
+    private static float _lastAppliedOpacity = -1f;
 
     internal static void Sync(bool visible)
     {
@@ -54,7 +56,7 @@ internal static class EndTurnOverlay
         if (_button == null || !NodeQuery.IsLive(_button) || !_button.Visible)
             return null;
 
-        return new DwellHoverService.Target(_buttonBounds, PressEndTurn, "EndTurn");
+        return DwellHoverService.EndTurn(_buttonBounds, PressEndTurnCore);
     }
 
     internal static bool TryActivateAt(Vector2 globalPos, out string message)
@@ -66,8 +68,10 @@ internal static class EndTurnOverlay
         if (!ContainsPoint(globalPos))
             return false;
 
+        if (!DwellActivationCooldown.TryRunMenuAction(PressEndTurnCore))
+            return false;
+
         message = "EndTurn button clicked";
-        PressEndTurn();
         return true;
     }
 
@@ -100,26 +104,47 @@ internal static class EndTurnOverlay
             _buttonSize,
             EndTurnBg,
             EndTurnBorder,
-            PressEndTurn);
+            () => DwellActivationCooldown.TryRunMenuAction(PressEndTurnCore));
 
         _layer.AddChild(_button);
+        InvalidateStyleCache();
         ModLogger.Info("End Turn overlay button created.");
     }
 
     private static void ApplyPresentation()
     {
-        if (_button == null || !NodeQuery.IsLive(_button))
-            return;
-
-        int size = SettingsStore.GetActionButtonSize();
-        if (size != _buttonSize)
+        long tick = OverlayPerfDiagnostics.BeginTick();
+        try
         {
-            _buttonSize = size;
-            OverlayButtonFactory.ApplySize(_button, size);
-        }
+            if (_button == null || !NodeQuery.IsLive(_button))
+                return;
 
-        int fontSize = Math.Clamp(_buttonSize / 5, 14, 28);
-        OverlayButtonFactory.ApplyMenuStyle(_button, EndTurnBg, EndTurnBorder, fontSize, SettingsStore.GetMenuButtonOpacity());
+            int size = SettingsStore.GetActionButtonSize();
+            if (size != _buttonSize)
+            {
+                _buttonSize = size;
+                OverlayButtonFactory.ApplySize(_button, size);
+            }
+
+            int fontSize = Math.Clamp(_buttonSize / 5, 14, 28);
+            float opacity = SettingsStore.GetMenuButtonOpacity();
+            if (fontSize == _lastAppliedFontSize && Math.Abs(opacity - _lastAppliedOpacity) < 0.001f)
+                return;
+
+            _lastAppliedFontSize = fontSize;
+            _lastAppliedOpacity = opacity;
+            OverlayButtonFactory.ApplyMenuStyle(_button, EndTurnBg, EndTurnBorder, fontSize, opacity);
+        }
+        finally
+        {
+            OverlayPerfDiagnostics.AddCategory("styles", tick);
+        }
+    }
+
+    private static void InvalidateStyleCache()
+    {
+        _lastAppliedFontSize = -1;
+        _lastAppliedOpacity = -1f;
     }
 
     private static void PositionButton()
@@ -138,7 +163,7 @@ internal static class EndTurnOverlay
         _buttonBounds = _button.GetGlobalRect();
     }
 
-    private static void PressEndTurn()
+    private static void PressEndTurnCore()
     {
         if (TrySetReadyToEndTurn())
             return;

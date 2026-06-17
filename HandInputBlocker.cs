@@ -9,9 +9,14 @@ namespace DwellTargeting;
 /// </summary>
 internal static class HandInputBlocker
 {
+    private const int RescanIntervalFrames = 10;
+
     private static readonly List<(Control Control, Control.MouseFilterEnum Original)> _blocked = new();
     private static readonly HashSet<ulong> _blockedIds = new();
     private static bool _active;
+    private static NPlayerHand? _blockedHand;
+    private static int _lastHandChildCount = -1;
+    private static int _framesSinceRescan;
 
     internal static bool IsDwellOverlayNode(Node node)
     {
@@ -41,11 +46,24 @@ internal static class HandInputBlocker
             return;
         }
 
-        if (hand is Control handControl && !IsDwellOverlayNode(handControl))
-            BlockControlOnce(handControl);
+        if (!_active || _blockedHand != hand)
+        {
+            _blockedHand = hand;
+            _lastHandChildCount = -1;
+            _framesSinceRescan = 0;
+            ApplyFullBlock(hand);
+            _active = true;
+            return;
+        }
 
-        BlockNewControls(hand);
-        _active = true;
+        _framesSinceRescan++;
+        int childCount = hand.GetChildCount();
+        if (childCount != _lastHandChildCount || _framesSinceRescan >= RescanIntervalFrames)
+        {
+            _lastHandChildCount = childCount;
+            _framesSinceRescan = 0;
+            BlockNewControls(hand);
+        }
     }
 
     internal static void Release()
@@ -57,7 +75,19 @@ internal static class HandInputBlocker
         _blocked.Clear();
         _blockedIds.Clear();
         _active = false;
+        _blockedHand = null;
+        _lastHandChildCount = -1;
+        _framesSinceRescan = 0;
         ModLogger.Info("Hand input restored.");
+    }
+
+    private static void ApplyFullBlock(NPlayerHand hand)
+    {
+        if (hand is Control handControl && !IsDwellOverlayNode(handControl))
+            BlockControlOnce(handControl);
+
+        BlockNewControls(hand);
+        _lastHandChildCount = hand.GetChildCount();
     }
 
     private static void BlockControlOnce(Control control)

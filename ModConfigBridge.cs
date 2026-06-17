@@ -58,12 +58,15 @@ internal static class ModConfigBridge
 
         var s = SettingsStore.Current;
         ApplyFromModConfig("hideOverlaysInMenus", s.HideOverlaysInMenus, v => SettingsStore.ApplyHideOverlaysInMenus(v, persist: false, syncModConfig: false));
+        ApplyFromModConfig("enablePerfLogging", s.EnablePerfLogging, v => SettingsStore.ApplyEnablePerfLogging(v, persist: false, syncModConfig: false));
         ApplyFromModConfig("hideEndTurnButton", s.HideEndTurnButton, v => SettingsStore.ApplyHideEndTurnButton(v, persist: false, syncModConfig: false));
         ApplyFromModConfig("hideConfirmButton", s.HideConfirmButton, v => SettingsStore.ApplyHideConfirmButton(v, persist: false, syncModConfig: false));
+        ApplyFromModConfig("cardDwellSeconds", s.CardDwellSeconds, v => SettingsStore.ApplyCardDwellSeconds(v, persist: false, syncModConfig: false));
+        ApplyFromModConfig("endTurnDwellSeconds", s.EndTurnDwellSeconds, v => SettingsStore.ApplyEndTurnDwellSeconds(v, persist: false, syncModConfig: false));
         ApplyFromModConfig("cardButtonScale", s.CardButtonScale, v => SettingsStore.ApplyCardButtonScale(v, persist: false, syncModConfig: false));
         ApplyFromModConfig("actionButtonScale", s.ActionButtonScale, v => SettingsStore.ApplyActionButtonScale(v, persist: false, syncModConfig: false));
-        ApplyFromModConfig("utilityButtonScale", s.UtilityButtonScale, v => SettingsStore.ApplyUtilityButtonScale(v, persist: false, syncModConfig: false));
         ApplyFromModConfig("cardButtonOpacity", s.CardButtonOpacity, v => SettingsStore.ApplyCardButtonOpacity(v, persist: false, syncModConfig: false));
+        ApplyFromModConfig("showEnemyLabels", s.ShowEnemyLabels, v => SettingsStore.ApplyShowEnemyLabels(v, persist: false, syncModConfig: false));
         ApplyFromModConfig("menuButtonOpacity", s.MenuButtonOpacity, v => SettingsStore.ApplyMenuButtonOpacity(v, persist: false, syncModConfig: false));
         ApplyFromModConfig("showDrawPileButton", s.ShowDrawPileButton, v => SettingsStore.ApplyShowDrawPileButton(v, persist: false, syncModConfig: false));
         ApplyFromModConfig("showDiscardPileButton", s.ShowDiscardPileButton, v => SettingsStore.ApplyShowDiscardPileButton(v, persist: false, syncModConfig: false));

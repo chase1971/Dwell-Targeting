@@ -16,10 +16,16 @@ internal static class SettingsOverlay
     private static PanelContainer? _panel;
     private static CheckBox? _hideEndTurnToggle;
     private static Button? _closeButton;
+    private static Label? _cardDwellValueLabel;
+    private static Label? _endTurnDwellValueLabel;
 
     private static Rect2 _gearBounds;
     private static Rect2 _hideEndTurnBounds;
     private static Rect2 _closeBounds;
+    private static Rect2 _cardDwellMinusBounds;
+    private static Rect2 _cardDwellPlusBounds;
+    private static Rect2 _endTurnDwellMinusBounds;
+    private static Rect2 _endTurnDwellPlusBounds;
 
     private static bool _open;
     private static bool _initialized;
@@ -75,7 +81,7 @@ internal static class SettingsOverlay
         {
             if (_hideEndTurnBounds.Size.X >= 1)
             {
-                targets.Add(new DwellHoverService.Target(
+                targets.Add(DwellHoverService.Menu(
                     _hideEndTurnBounds,
                     ToggleHideEndTurn,
                     "SettingsHideEndTurn"));
@@ -83,11 +89,13 @@ internal static class SettingsOverlay
 
             if (_closeBounds.Size.X >= 1)
             {
-                targets.Add(new DwellHoverService.Target(
+                targets.Add(DwellHoverService.Menu(
                     _closeBounds,
                     Close,
                     "SettingsClose"));
             }
+
+            AddAdjustDwellTargets(targets);
 
             return;
         }
@@ -100,7 +108,7 @@ internal static class SettingsOverlay
         if (ModConfigBridge.IsRegistered || _gearBounds.Size.X < 1)
             return;
 
-        targets.Add(new DwellHoverService.Target(
+        targets.Add(DwellHoverService.Menu(
             _gearBounds,
             Open,
             "SettingsGear"));
@@ -116,17 +124,24 @@ internal static class SettingsOverlay
         {
             if (_closeBounds.Size.X >= 1 && _closeBounds.HasPoint(globalPos))
             {
+                if (!DwellActivationCooldown.TryRunMenuAction(Close))
+                    return false;
+
                 message = "Settings close clicked";
-                Close();
                 return true;
             }
 
             if (_hideEndTurnBounds.Size.X >= 1 && _hideEndTurnBounds.HasPoint(globalPos))
             {
+                if (!DwellActivationCooldown.TryRunMenuAction(ToggleHideEndTurn))
+                    return false;
+
                 message = "Settings hide End Turn clicked";
-                ToggleHideEndTurn();
                 return true;
             }
+
+            if (TryRouteAdjustClick(globalPos, out message))
+                return true;
 
             if (_panel != null && NodeQuery.IsLive(_panel) && _panel.Visible)
             {
@@ -140,8 +155,10 @@ internal static class SettingsOverlay
 
         if (_gearBounds.Size.X >= 1 && _gearBounds.HasPoint(globalPos))
         {
+            if (!DwellActivationCooldown.TryRunMenuAction(Open))
+                return false;
+
             message = "Settings gear clicked";
-            Open();
             return true;
         }
 
@@ -224,7 +241,7 @@ internal static class SettingsOverlay
     private static void Open()
     {
         _open = true;
-        SyncToggleFromStore();
+        SyncFromStore();
         SyncVisibility();
         UpdateBounds();
         DwellHoverService.Reset();
@@ -243,15 +260,31 @@ internal static class SettingsOverlay
     private static void ToggleHideEndTurn()
     {
         SettingsStore.SetHideEndTurnButton(!SettingsStore.Current.HideEndTurnButton);
-        SyncToggleFromStore();
+        SyncFromStore();
     }
 
-    private static void SyncToggleFromStore()
+    private static void AdjustCardDwell(float delta)
     {
-        if (_hideEndTurnToggle == null || !NodeQuery.IsLive(_hideEndTurnToggle))
-            return;
+        SettingsStore.ApplyCardDwellSeconds(SettingsStore.Current.CardDwellSeconds + delta);
+        SyncFromStore();
+    }
 
-        _hideEndTurnToggle.ButtonPressed = SettingsStore.Current.HideEndTurnButton;
+    private static void AdjustEndTurnDwell(float delta)
+    {
+        SettingsStore.ApplyEndTurnDwellSeconds(SettingsStore.Current.EndTurnDwellSeconds + delta);
+        SyncFromStore();
+    }
+
+    private static void SyncFromStore()
+    {
+        if (_hideEndTurnToggle != null && NodeQuery.IsLive(_hideEndTurnToggle))
+            _hideEndTurnToggle.ButtonPressed = SettingsStore.Current.HideEndTurnButton;
+
+        if (_cardDwellValueLabel != null && NodeQuery.IsLive(_cardDwellValueLabel))
+            _cardDwellValueLabel.Text = $"{SettingsStore.GetCardDwellSeconds():F2}s";
+
+        if (_endTurnDwellValueLabel != null && NodeQuery.IsLive(_endTurnDwellValueLabel))
+            _endTurnDwellValueLabel.Text = $"{SettingsStore.GetEndTurnDwellSeconds():F2}s";
     }
 
     private static void SyncVisibility()
@@ -279,6 +312,119 @@ internal static class SettingsOverlay
             _closeBounds = _closeButton.GetGlobalRect();
         else
             _closeBounds = default;
+
+        UpdateAdjustBounds();
+    }
+
+    private static void UpdateAdjustBounds()
+    {
+        _cardDwellMinusBounds = default;
+        _cardDwellPlusBounds = default;
+        _endTurnDwellMinusBounds = default;
+        _endTurnDwellPlusBounds = default;
+
+        if (_panel == null || !NodeQuery.IsLive(_panel) || !_panel.Visible)
+            return;
+
+        foreach (var button in NodeQuery.FindAll<Button>(_panel))
+        {
+            if (!NodeQuery.IsVisible(button))
+                continue;
+
+            switch (button.Name)
+            {
+                case "CardDwellMinus":
+                    _cardDwellMinusBounds = button.GetGlobalRect();
+                    break;
+                case "CardDwellPlus":
+                    _cardDwellPlusBounds = button.GetGlobalRect();
+                    break;
+                case "EndTurnDwellMinus":
+                    _endTurnDwellMinusBounds = button.GetGlobalRect();
+                    break;
+                case "EndTurnDwellPlus":
+                    _endTurnDwellPlusBounds = button.GetGlobalRect();
+                    break;
+            }
+        }
+    }
+
+    private static void AddAdjustDwellTargets(List<DwellHoverService.Target> targets)
+    {
+        if (_cardDwellMinusBounds.Size.X >= 1)
+        {
+            targets.Add(DwellHoverService.Menu(
+                _cardDwellMinusBounds,
+                () => AdjustCardDwell(-0.05f),
+                "SettingsCardDwellMinus"));
+        }
+
+        if (_cardDwellPlusBounds.Size.X >= 1)
+        {
+            targets.Add(DwellHoverService.Menu(
+                _cardDwellPlusBounds,
+                () => AdjustCardDwell(0.05f),
+                "SettingsCardDwellPlus"));
+        }
+
+        if (_endTurnDwellMinusBounds.Size.X >= 1)
+        {
+            targets.Add(DwellHoverService.Menu(
+                _endTurnDwellMinusBounds,
+                () => AdjustEndTurnDwell(-0.05f),
+                "SettingsEndTurnDwellMinus"));
+        }
+
+        if (_endTurnDwellPlusBounds.Size.X >= 1)
+        {
+            targets.Add(DwellHoverService.Menu(
+                _endTurnDwellPlusBounds,
+                () => AdjustEndTurnDwell(0.05f),
+                "SettingsEndTurnDwellPlus"));
+        }
+    }
+
+    private static bool TryRouteAdjustClick(Vector2 globalPos, out string message)
+    {
+        message = string.Empty;
+
+        if (_cardDwellMinusBounds.Size.X >= 1 && _cardDwellMinusBounds.HasPoint(globalPos))
+        {
+            if (!DwellActivationCooldown.TryRunMenuAction(() => AdjustCardDwell(-0.05f)))
+                return false;
+
+            message = "Card dwell minus";
+            return true;
+        }
+
+        if (_cardDwellPlusBounds.Size.X >= 1 && _cardDwellPlusBounds.HasPoint(globalPos))
+        {
+            if (!DwellActivationCooldown.TryRunMenuAction(() => AdjustCardDwell(0.05f)))
+                return false;
+
+            message = "Card dwell plus";
+            return true;
+        }
+
+        if (_endTurnDwellMinusBounds.Size.X >= 1 && _endTurnDwellMinusBounds.HasPoint(globalPos))
+        {
+            if (!DwellActivationCooldown.TryRunMenuAction(() => AdjustEndTurnDwell(-0.05f)))
+                return false;
+
+            message = "End Turn dwell minus";
+            return true;
+        }
+
+        if (_endTurnDwellPlusBounds.Size.X >= 1 && _endTurnDwellPlusBounds.HasPoint(globalPos))
+        {
+            if (!DwellActivationCooldown.TryRunMenuAction(() => AdjustEndTurnDwell(0.05f)))
+                return false;
+
+            message = "End Turn dwell plus";
+            return true;
+        }
+
+        return false;
     }
 
     private static void CreateUi(Node sceneRoot)
@@ -336,6 +482,20 @@ internal static class SettingsOverlay
         hint.AddThemeFontSizeOverride("font_size", 14);
         root.AddChild(hint);
 
+        root.AddChild(CreateDwellAdjustRow(
+            "Card hover time",
+            "CardDwell",
+            () => AdjustCardDwell(-0.05f),
+            () => AdjustCardDwell(0.05f),
+            out _cardDwellValueLabel));
+
+        root.AddChild(CreateDwellAdjustRow(
+            "End Turn hover time",
+            "EndTurnDwell",
+            () => AdjustEndTurnDwell(-0.05f),
+            () => AdjustEndTurnDwell(0.05f),
+            out _endTurnDwellValueLabel));
+
         _hideEndTurnToggle = new CheckBox
         {
             Text = "Hide End Turn button during combat",
@@ -358,7 +518,72 @@ internal static class SettingsOverlay
         _closeButton.Pressed += Close;
         root.AddChild(_closeButton);
 
+        SyncFromStore();
         PositionUi();
+    }
+
+    private static Control CreateDwellAdjustRow(
+        string title,
+        string namePrefix,
+        Action onMinus,
+        Action onPlus,
+        out Label valueLabel)
+    {
+        var row = new VBoxContainer();
+        row.AddThemeConstantOverride("separation", 8);
+
+        var titleLabel = new Label
+        {
+            Text = title,
+            HorizontalAlignment = HorizontalAlignment.Center
+        };
+        titleLabel.AddThemeFontSizeOverride("font_size", 18);
+        row.AddChild(titleLabel);
+
+        var controls = new HBoxContainer
+        {
+            Alignment = BoxContainer.AlignmentMode.Center
+        };
+        controls.AddThemeConstantOverride("separation", 16);
+        row.AddChild(controls);
+
+        var minus = new Button
+        {
+            Name = $"{namePrefix}Minus",
+            Text = "−",
+            CustomMinimumSize = new Vector2(72, 64),
+            FocusMode = Control.FocusModeEnum.None,
+            MouseFilter = Control.MouseFilterEnum.Stop
+        };
+        ApplyButtonStyle(minus, accent: false);
+        minus.AddThemeFontSizeOverride("font_size", 32);
+        minus.Pressed += onMinus;
+        controls.AddChild(minus);
+
+        valueLabel = new Label
+        {
+            Text = "0.00s",
+            CustomMinimumSize = new Vector2(120, 64),
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        valueLabel.AddThemeFontSizeOverride("font_size", 24);
+        controls.AddChild(valueLabel);
+
+        var plus = new Button
+        {
+            Name = $"{namePrefix}Plus",
+            Text = "+",
+            CustomMinimumSize = new Vector2(72, 64),
+            FocusMode = Control.FocusModeEnum.None,
+            MouseFilter = Control.MouseFilterEnum.Stop
+        };
+        ApplyButtonStyle(plus, accent: false);
+        plus.AddThemeFontSizeOverride("font_size", 32);
+        plus.Pressed += onPlus;
+        controls.AddChild(plus);
+
+        return row;
     }
 
     private static void PositionUi()

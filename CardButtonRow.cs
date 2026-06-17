@@ -27,6 +27,8 @@ internal sealed class CardButtonRow
     private int _enemyCount;
     private int _selectSlot;
     private int _buttonSize;
+    private int _lastAppliedFontSize = -1;
+    private float _lastAppliedOpacity = -1f;
 
     internal CardButtonRow(NCardHolder holder, Control? fallbackRoot)
     {
@@ -86,14 +88,28 @@ internal sealed class CardButtonRow
 
     private void RefreshButtonAppearance()
     {
-        int fontSize = Math.Max(12, _buttonSize / 2);
-        float opacity = SettingsStore.GetCardButtonOpacity();
-        foreach (var button in _buttons)
+        long tick = OverlayPerfDiagnostics.BeginTick();
+        try
         {
-            if (!NodeQuery.IsLive(button))
-                continue;
+            int fontSize = Math.Max(12, _buttonSize / 2);
+            float opacity = SettingsStore.GetCardButtonOpacity();
+            if (fontSize == _lastAppliedFontSize && Math.Abs(opacity - _lastAppliedOpacity) < 0.001f)
+                return;
 
-            OverlayButtonFactory.ApplyCardStyle(button, fontSize, opacity);
+            _lastAppliedFontSize = fontSize;
+            _lastAppliedOpacity = opacity;
+
+            foreach (var button in _buttons)
+            {
+                if (!NodeQuery.IsLive(button))
+                    continue;
+
+                OverlayButtonFactory.ApplyCardStyle(button, fontSize, opacity);
+            }
+        }
+        finally
+        {
+            OverlayPerfDiagnostics.AddCategory("styles", tick);
         }
     }
 
@@ -148,7 +164,7 @@ internal sealed class CardButtonRow
                 continue;
 
             string cardName = _holder.CardModel?.Id.Entry ?? "?";
-            targets.Add(new DwellHoverService.Target(rect, () => ActivateButton(label, action), $"{label}:{cardName}"));
+            targets.Add(DwellHoverService.Card(rect, () => ActivateButton(label, action), $"{label}:{cardName}"));
         }
     }
 
@@ -340,6 +356,13 @@ internal sealed class CardButtonRow
         _buttons.Clear();
         _buttonActions.Clear();
         _layout = null;
+        InvalidateStyleCache();
+    }
+
+    private void InvalidateStyleCache()
+    {
+        _lastAppliedFontSize = -1;
+        _lastAppliedOpacity = -1f;
     }
 
     private void AddTargetButton(Container parent, int slot, int buttonSize)

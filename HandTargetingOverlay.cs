@@ -21,6 +21,8 @@ internal static class HandTargetingOverlay
     private static Rect2 _handBlockBounds;
     private static readonly Dictionary<ulong, CardButtonRow> _rows = new();
     private static bool _hooked;
+    private static bool _isTornDown = true;
+    private static OverlayMode _activeOverlayMode = OverlayMode.None;
 
     internal static void EnsureInitialized()
     {
@@ -59,8 +61,17 @@ internal static class HandTargetingOverlay
         if (endTurn != null)
             targets.Add(endTurn.Value);
 
-        foreach (var row in _rows.Values)
-            row.CollectDwellTargets(targets);
+        var mode = OverlayModeService.GetMode();
+        if (mode == OverlayMode.Rewards)
+            RewardsOverlay.CollectDwellTargets(targets);
+        else if (mode == OverlayMode.PileSelect)
+            PileSelectOverlay.CollectDwellTargets(targets);
+        else
+        {
+            PotionPopupOverlay.CollectDwellTargets(targets);
+            foreach (var row in _rows.Values)
+                row.CollectDwellTargets(targets);
+        }
     }
 
     internal static bool TryRouteClick(Vector2 globalPos, out string message)
@@ -85,6 +96,9 @@ internal static class HandTargetingOverlay
             return true;
 
         if (EndTurnOverlay.TryActivateAt(globalPos, out message))
+            return true;
+
+        if (PotionPopupOverlay.TryRouteClick(globalPos, out message))
             return true;
 
         foreach (var row in _rows.Values)
@@ -144,6 +158,9 @@ internal static class HandTargetingOverlay
             return true;
         }
 
+        if (PotionPopupOverlay.TryHitDwellButton(globalPos, out message))
+            return true;
+
         foreach (var row in _rows.Values)
         {
             if (row.TryHitAt(globalPos, out message))
@@ -155,91 +172,126 @@ internal static class HandTargetingOverlay
 
     private static void OnProcessFrame()
     {
-        SettingsOverlay.UpdateFrame();
-        ModManagerSettingsBridge.TryHydrateFromPersistedValues();
-        SettingsStore.MaybeReload();
-
-        if (GameOverlayVisibility.ShouldHideOverlays())
+        long frameStart = OverlayPerfDiagnostics.BeginTick();
+        try
         {
-            SuppressForMenu();
-            FinalizeDwellTargets();
-            return;
-        }
+            SettingsOverlay.UpdateFrame();
+            ModManagerSettingsBridge.TryHydrateFromPersistedValues();
+            SettingsStore.MaybeReload();
 
-        var mode = OverlayModeService.GetMode();
-        bool showUtility = RunManager.Instance.IsInProgress
-            && mode is not OverlayMode.Rewards and not OverlayMode.PileSelect;
-        UtilityBarOverlay.Sync(showUtility);
+            if (GameOverlayVisibility.ShouldHideOverlays())
+            {
+                SuppressForMenu();
+                FinalizeDwellTargets();
+                return;
+            }
 
-        if (mode == OverlayMode.None)
-        {
-            TearDown();
+            long getModeStart = OverlayPerfDiagnostics.BeginTick();
+            var mode = OverlayModeService.GetMode();
+            OverlayPerfDiagnostics.AddCategory("getMode", getModeStart);
+
+            bool showUtility = RunManager.Instance.IsInProgress
+                && mode is not OverlayMode.Rewards and not OverlayMode.PileSelect;
             UtilityBarOverlay.Sync(showUtility);
-            if (showUtility)
-                EnsureInputRouter();
+
+            if (mode == OverlayMode.None)
+            {
+                if (!_isTornDown)
+                    TearDown();
+                UtilityBarOverlay.Sync(showUtility);
+                if (showUtility)
+                    EnsureInputRouter();
+                FinalizeDwellTargets();
+                return;
+            }
+
+            if (_activeOverlayMode != mode)
+            {
+                _isTornDown = false;
+                _activeOverlayMode = mode;
+            }
+
+            EnsureInputRouter();
+
+            if (mode == OverlayMode.Rewards)
+            {
+                SyncRewardsMode();
+                FinalizeDwellTargets();
+                return;
+            }
+
+            if (mode == OverlayMode.PileSelect)
+            {
+                SyncPileSelectMode();
+                FinalizeDwellTargets();
+                return;
+            }
+
+            RewardsOverlay.Hide();
+            PileSelectOverlay.Hide();
+
+            var hand = NPlayerHand.Instance;
+            if (hand == null)
+            {
+                if (!_isTornDown)
+                    TearDown();
+                return;
+            }
+
+            _isTornDown = false;
+
+            long handSyncStart = OverlayPerfDiagnostics.BeginTick();
+            if (HandBlockPolicy.ShouldBlockHandInput(mode))
+                HandInputBlocker.Sync(hand, shouldBlock: true);
+            else
+                HandInputBlocker.Release();
+
+            if (HandBlockPolicy.ShouldBlockMouseCardPlay(mode))
+                MouseCardPlayBlocker.Sync(shouldBlock: true);
+            else
+                MouseCardPlayBlocker.Release();
+
+            EnsureFallbackCanvas();
+
+            if (mode == OverlayMode.HandSelect)
+            {
+                EndTurnOverlay.Hide();
+                EnemyLabelOverlay.Hide();
+                ConfirmOverlay.Sync(visible: true);
+                SyncHandSelectRows(hand);
+            }
+            else
+            {
+                ConfirmOverlay.Hide();
+                EndTurnOverlay.Sync(visible: true);
+                SyncCombatPlayRows(hand);
+            }
+
+            PotionPopupOverlay.Sync();
+
+            OverlayPerfDiagnostics.AddCategory("handSync", handSyncStart);
+
             FinalizeDwellTargets();
-            return;
         }
-
-        EnsureInputRouter();
-
-        if (mode == OverlayMode.Rewards)
+        finally
         {
-            SyncRewardsMode();
-            FinalizeDwellTargets();
-            return;
+            OverlayPerfDiagnostics.EndFrame(frameStart);
         }
-
-        if (mode == OverlayMode.PileSelect)
-        {
-            SyncPileSelectMode();
-            FinalizeDwellTargets();
-            return;
-        }
-
-        RewardsOverlay.Hide();
-        PileSelectOverlay.Hide();
-
-        var hand = NPlayerHand.Instance;
-        if (hand == null)
-        {
-            TearDown();
-            return;
-        }
-
-        if (HandBlockPolicy.ShouldBlockHandInput(mode))
-            HandInputBlocker.Sync(hand, shouldBlock: true);
-        else
-            HandInputBlocker.Release();
-
-        if (HandBlockPolicy.ShouldBlockMouseCardPlay(mode))
-            MouseCardPlayBlocker.Sync(shouldBlock: true);
-        else
-            MouseCardPlayBlocker.Release();
-
-        EnsureFallbackCanvas();
-
-        if (mode == OverlayMode.HandSelect)
-        {
-            EndTurnOverlay.Hide();
-            ConfirmOverlay.Sync(visible: true);
-            SyncHandSelectRows(hand);
-        }
-        else
-        {
-            ConfirmOverlay.Hide();
-            EndTurnOverlay.Sync(visible: true);
-            SyncCombatPlayRows(hand);
-        }
-
-        FinalizeDwellTargets();
     }
 
     private static void FinalizeDwellTargets()
     {
-        var dwellTargets = new List<DwellHoverService.Target>();
-        CollectDwellTargets(dwellTargets);
-        DwellHoverService.ProcessFrame(dwellTargets, GetProcessDelta());
+        long dwellStart = OverlayPerfDiagnostics.BeginTick();
+        try
+        {
+            var dwellTargets = new List<DwellHoverService.Target>();
+            CollectDwellTargets(dwellTargets);
+            DwellHoverService.ProcessFrame(dwellTargets, GetProcessDelta());
+        }
+        finally
+        {
+            OverlayPerfDiagnostics.AddCategory("dwell", dwellStart);
+        }
     }
 
     private static void SyncPileSelectMode()
@@ -251,6 +303,7 @@ internal static class HandTargetingOverlay
         EndTurnOverlay.Hide();
         ConfirmOverlay.Hide();
         ClearHandRows();
+        EnemyLabelOverlay.Hide();
         RewardsOverlay.Hide();
         PileSelectOverlay.Sync();
         UtilityBarOverlay.Sync(RunManager.Instance.IsInProgress);
@@ -265,6 +318,7 @@ internal static class HandTargetingOverlay
         EndTurnOverlay.Hide();
         ConfirmOverlay.Hide();
         ClearHandRows();
+        EnemyLabelOverlay.Hide();
         RewardsOverlay.Sync();
     }
 
@@ -306,6 +360,11 @@ internal static class HandTargetingOverlay
 
         UpdateHandBlockBounds(handBounds);
         RemoveStaleRows(liveIds);
+
+        if (SettingsStore.Current.ShowEnemyLabels)
+            EnemyLabelOverlay.Sync(enemies, handSize);
+        else
+            EnemyLabelOverlay.Hide();
     }
 
     private static void SyncHandSelectRows(NPlayerHand hand)
@@ -475,7 +534,11 @@ internal static class HandTargetingOverlay
         EndTurnOverlay.Hide();
         ConfirmOverlay.Hide();
         UtilityBarOverlay.Hide();
+        PotionPopupOverlay.Hide();
+        EnemyLabelOverlay.Hide();
         ClearHandRows();
+        _isTornDown = true;
+        _activeOverlayMode = OverlayMode.None;
     }
 
     private static void TearDown()
@@ -484,10 +547,15 @@ internal static class HandTargetingOverlay
         HandInputBlocker.Release();
         MouseCardPlayBlocker.Release();
         HandLayoutDiagnostics.Reset();
+        CardAnchorService.ClearCache();
         EndTurnOverlay.Hide();
         ConfirmOverlay.Hide();
         RewardsOverlay.Hide();
         PileSelectOverlay.Hide();
+        PotionPopupOverlay.Hide();
+        EnemyLabelOverlay.Hide();
         ClearHandRows();
+        _isTornDown = true;
+        _activeOverlayMode = OverlayMode.None;
     }
 }

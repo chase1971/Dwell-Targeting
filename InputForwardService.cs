@@ -1,6 +1,7 @@
 using Godot;
 using MegaCrit.Sts2.Core.Nodes.Cards;
 using MegaCrit.Sts2.Core.Nodes.Cards.Holders;
+using MegaCrit.Sts2.Core.Nodes.GodotExtensions;
 
 namespace DwellTargeting;
 
@@ -72,6 +73,37 @@ internal static class InputForwardService
         }
 
         ClickControlDeferred(control, button);
+    }
+
+    internal static bool TryActivateControl(Control control)
+    {
+        if (!NodeQuery.IsLive(control))
+            return false;
+
+        try
+        {
+            if (control is NClickableControl clickable)
+            {
+                clickable.ForceClick();
+                ModLogger.Info($"Activated '{control.Name}' via ForceClick.");
+                return true;
+            }
+
+            if (control is BaseButton baseButton)
+            {
+                baseButton.EmitSignal(BaseButton.SignalName.Pressed);
+                ModLogger.Info($"Activated button '{control.Name}' via Pressed signal.");
+                return true;
+            }
+
+            ClickControlDeferred(control, MouseButton.Left);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            ModLogger.Warn($"TryActivateControl failed on {control.Name}: {ex.Message}");
+            return false;
+        }
     }
 
     internal static void PressKey(Key key)

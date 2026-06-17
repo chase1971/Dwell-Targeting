@@ -1,27 +1,25 @@
 using Godot;
-using MegaCrit.Sts2.Core.Nodes.Cards;
+using MegaCrit.Sts2.Core.Nodes.GodotExtensions;
+using MegaCrit.Sts2.Core.Nodes.Potions;
 
 namespace DwellTargeting;
 
 /// <summary>
-/// Numbered dwell buttons above cards shown in pile/grid selection screens.
+/// Numbered dwell buttons beside Use/Discard choices in the potion popup menu.
 /// </summary>
-internal static class PileSelectOverlay
+internal static class PotionPopupOverlay
 {
-    private const int GapAboveCard = 28;
-    private const int CanvasLayerOrder = 130;
+    private const int ButtonSize = 44;
+    private const int CanvasLayerOrder = 131;
+    private const int SideOffset = 72;
 
     private static CanvasLayer? _layer;
     private static Control? _root;
-    private static readonly Dictionary<ulong, PileCardButton> _buttons = new();
-    private static Node? _cachedScreen;
-    private static List<NCard>? _cachedCards;
-    private static int _framesSinceCardScan;
-    private const int CardRescanIntervalFrames = 5;
+    private static readonly Dictionary<ulong, PopupSideButton> _sideButtons = new();
 
     internal static void Sync()
     {
-        if (!OverlayModeService.TryGetPileSelectScreen(out Node screen))
+        if (!TryGetVisiblePopup(out var popup))
         {
             Hide();
             return;
@@ -33,65 +31,51 @@ internal static class PileSelectOverlay
 
         _root.Visible = true;
 
-        bool screenChanged = _cachedScreen != screen;
-        _framesSinceCardScan++;
-        if (screenChanged || _cachedCards == null || _framesSinceCardScan >= CardRescanIntervalFrames)
-        {
-            _framesSinceCardScan = 0;
-            _cachedScreen = screen;
-            _cachedCards = NodeQuery.FindAll<NCard>(screen)
-                .Where(c => NodeQuery.IsVisible(c) && IsSelectableCard(c))
-                .OrderBy(c => c.GlobalPosition.Y)
-                .ThenBy(c => c.GlobalPosition.X)
-                .ToList();
-        }
-
-        var cards = _cachedCards;
+        var menuButtons = NodeQuery.FindAll<NPotionPopupButton>(popup)
+            .Where(IsEnabledMenuButton)
+            .OrderBy(b => b.GlobalPosition.Y)
+            .ThenBy(b => b.GlobalPosition.X)
+            .ToList();
 
         var liveIds = new HashSet<ulong>();
         int slot = 1;
-        int buttonSize = ComputeButtonSize(cards.Count);
-
-        foreach (var card in cards)
+        foreach (var menuButton in menuButtons)
         {
-            ulong id = card.GetInstanceId();
+            ulong id = menuButton.GetInstanceId();
             liveIds.Add(id);
 
-            if (!_buttons.TryGetValue(id, out var side))
+            if (!_sideButtons.TryGetValue(id, out var side))
             {
-                side = new PileCardButton(card, _root);
-                _buttons[id] = side;
-                ModLogger.Info($"Pile select button {slot} for {card.Name}.");
+                side = new PopupSideButton(menuButton, _root);
+                _sideButtons[id] = side;
+                ModLogger.Info($"Potion popup side button {slot} for {menuButton.Name}.");
             }
 
-            side.Sync(slot, buttonSize);
+            side.Sync(slot, ButtonSize);
             slot++;
         }
 
-        foreach (var pair in _buttons.ToList())
+        foreach (var pair in _sideButtons.ToList())
         {
             if (!liveIds.Contains(pair.Key))
             {
                 pair.Value.Dispose();
-                _buttons.Remove(pair.Key);
+                _sideButtons.Remove(pair.Key);
             }
         }
     }
 
     internal static void CollectDwellTargets(List<DwellHoverService.Target> targets)
     {
-        foreach (var side in _buttons.Values)
+        foreach (var side in _sideButtons.Values)
             side.CollectDwellTargets(targets);
     }
 
     internal static void Hide()
     {
-        foreach (var side in _buttons.Values)
+        foreach (var side in _sideButtons.Values)
             side.Dispose();
-        _buttons.Clear();
-        _cachedScreen = null;
-        _cachedCards = null;
-        _framesSinceCardScan = 0;
+        _sideButtons.Clear();
 
         if (_root != null && NodeQuery.IsLive(_root))
             _root.Visible = false;
@@ -100,7 +84,7 @@ internal static class PileSelectOverlay
     internal static bool TryRouteClick(Vector2 globalPos, out string message)
     {
         message = string.Empty;
-        foreach (var side in _buttons.Values)
+        foreach (var side in _sideButtons.Values)
         {
             if (side.TryActivateAt(globalPos, out message))
                 return true;
@@ -109,17 +93,40 @@ internal static class PileSelectOverlay
         return false;
     }
 
-    private static bool IsSelectableCard(NCard card)
+    internal static bool TryHitDwellButton(Vector2 globalPos, out string message)
     {
-        if (card is not Control control)
-            return false;
+        message = string.Empty;
+        foreach (var side in _sideButtons.Values)
+        {
+            if (side.TryHitAt(globalPos, out message))
+                return true;
+        }
 
-        var rect = control.GetGlobalRect();
-        return rect.Size.X >= 80f && rect.Size.Y >= 100f;
+        return false;
     }
 
-    private static int ComputeButtonSize(int cardCount) =>
-        cardCount >= 12 ? 26 : cardCount >= 8 ? 30 : cardCount >= 5 ? 34 : 38;
+    private static bool TryGetVisiblePopup(out NPotionPopup popup)
+    {
+        popup = null!;
+        var tree = Engine.GetMainLoop() as SceneTree;
+        if (tree?.Root == null)
+            return false;
+
+        foreach (var candidate in NodeQuery.FindAll<NPotionPopup>(tree.Root))
+        {
+            if (!NodeQuery.IsVisible(candidate))
+                continue;
+
+            popup = candidate;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsEnabledMenuButton(NPotionPopupButton button) =>
+        NodeQuery.IsVisible(button)
+        && button is NClickableControl { IsEnabled: true };
 
     private static void EnsureCanvas()
     {
@@ -130,41 +137,43 @@ internal static class PileSelectOverlay
         if (tree?.Root == null)
             return;
 
-        _layer = new CanvasLayer { Layer = CanvasLayerOrder, Name = "DwellPileSelectLayer" };
+        _layer = new CanvasLayer { Layer = CanvasLayerOrder, Name = "DwellPotionPopupLayer" };
         tree.Root.AddChild(_layer);
 
         _root = new Control
         {
-            Name = "DwellPileSelectRoot",
+            Name = "DwellPotionPopupRoot",
             MouseFilter = Control.MouseFilterEnum.Ignore
         };
         _root.SetAnchorsPreset(Control.LayoutPreset.FullRect);
         _layer.AddChild(_root);
-        ModLogger.Info("Pile select overlay canvas created.");
+        ModLogger.Info("Potion popup overlay canvas created.");
     }
 
-    private sealed class PileCardButton
+    private sealed class PopupSideButton
     {
-        private readonly NCard _card;
+        private readonly NPotionPopupButton _target;
         private readonly Control _host;
         private Button? _button;
-        private int _slot;
+        private string _label = "?";
 
-        internal PileCardButton(NCard card, Control root)
+        internal PopupSideButton(NPotionPopupButton target, Control root)
         {
-            _card = card;
+            _target = target;
             _host = new Control
             {
-                Name = $"DwellPileBtn_{card.GetInstanceId()}",
+                Name = $"DwellPotionPopupSide_{target.GetInstanceId()}",
                 MouseFilter = Control.MouseFilterEnum.Ignore,
                 ZIndex = 200
             };
             root.AddChild(_host);
         }
 
-        internal void Sync(int slot, int buttonSize)
+        internal void Sync(int slot, int buttonSize) => Sync(slot.ToString(), buttonSize);
+
+        internal void Sync(string label, int buttonSize)
         {
-            _slot = slot;
+            _label = label;
             EnsureButton(buttonSize);
             PositionButton();
         }
@@ -175,13 +184,16 @@ internal static class PileSelectOverlay
                 return;
 
             var rect = _button.GetGlobalRect();
-            targets.Add(DwellHoverService.Card(
-                rect,
-                () => PileCardSelectionService.TrySelect(_card, _slot),
-                $"Pile:{_slot}"));
+            targets.Add(DwellHoverService.Card(rect, Activate, $"PotionPopup:{_label}"));
         }
 
-        internal bool TryActivateAt(Vector2 globalPos, out string message)
+        internal bool TryHitAt(Vector2 globalPos, out string message) =>
+            TryActivateAt(globalPos, out message, activate: false);
+
+        internal bool TryActivateAt(Vector2 globalPos, out string message) =>
+            TryActivateAt(globalPos, out message, activate: true);
+
+        private bool TryActivateAt(Vector2 globalPos, out string message, bool activate)
         {
             message = string.Empty;
             if (_button == null || !NodeQuery.IsLive(_button) || !_button.Visible)
@@ -190,9 +202,23 @@ internal static class PileSelectOverlay
             if (!_button.GetGlobalRect().HasPoint(globalPos))
                 return false;
 
-            message = $"Pile select slot {_slot}";
-            PileCardSelectionService.TrySelect(_card, _slot);
+            message = activate ? $"Potion popup side '{_label}' activated" : $"Hit potion popup side '{_label}'";
+            if (activate)
+                Activate();
+
             return true;
+        }
+
+        private void Activate()
+        {
+            ModLogger.Info($"Potion popup side button '{_label}'");
+            if (!NodeQuery.IsLive(_target))
+                return;
+
+            if (_target is NClickableControl clickable)
+                clickable.ForceClick();
+            else
+                InputForwardService.TryActivateControl(_target);
         }
 
         internal void Dispose()
@@ -206,7 +232,7 @@ internal static class PileSelectOverlay
         {
             if (_button != null && NodeQuery.IsLive(_button))
             {
-                _button.Text = _slot.ToString();
+                _button.Text = _label;
                 _button.CustomMinimumSize = new Vector2(buttonSize, buttonSize);
                 _button.Visible = true;
                 return;
@@ -215,7 +241,7 @@ internal static class PileSelectOverlay
             int fontSize = Math.Max(12, buttonSize / 2);
             _button = new Button
             {
-                Text = _slot.ToString(),
+                Text = _label,
                 CustomMinimumSize = new Vector2(buttonSize, buttonSize),
                 FocusMode = Control.FocusModeEnum.None,
                 MouseFilter = Control.MouseFilterEnum.Stop,
@@ -240,21 +266,20 @@ internal static class PileSelectOverlay
             _button.AddThemeStyleboxOverride("pressed", style);
             _button.AddThemeStyleboxOverride("focus", style);
             _button.AddThemeFontSizeOverride("font_size", fontSize);
-            _button.Pressed += () => PileCardSelectionService.TrySelect(_card, _slot);
+            _button.Pressed += Activate;
             _host.AddChild(_button);
         }
 
         private void PositionButton()
         {
-            if (_button == null || _card is not Control cardControl || !NodeQuery.IsLive(cardControl))
+            if (_button == null || !NodeQuery.IsLive(_target))
                 return;
 
-            var targetRect = cardControl.GetGlobalRect();
+            var targetRect = _target.GetGlobalRect();
             _button.ResetSize();
             var size = _button.GetCombinedMinimumSize();
-            float centerX = targetRect.Position.X + (targetRect.Size.X / 2f);
-            float x = centerX - (size.X / 2f);
-            float y = targetRect.Position.Y - GapAboveCard - size.Y;
+            float x = targetRect.Position.X - SideOffset - size.X;
+            float y = targetRect.Position.Y + ((targetRect.Size.Y - size.Y) / 2f);
             _button.GlobalPosition = new Vector2(x, y);
             _button.Size = size;
             _button.Visible = true;

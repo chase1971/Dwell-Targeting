@@ -1,5 +1,83 @@
 # Dwell Targeting — Session Log
 
+## Backlog — known bugs & remaining screens (living list)
+
+### Bugs — fix before new screens
+
+| # | Issue | Symptom | Likely cause |
+|---|--------|---------|--------------|
+| B1 | **Loot screen — card reward** | Gold/relic numbered picks work. Card-reward option: dwell number **skips** the card instead of opening the 3-card draft. Clicking the real UI opens pick-1-of-3 correctly. | `RewardCollectedFrom` may be wrong for card-type `NRewardButton` (claims/skips vs opens draft). Card draft uses `NCardRewardSelectionScreen` + `NCardRewardAlternativeButton` — **not** in `IsPileSelectScreen`, so no numbered overlay after draft opens. May need `ForceClick` on card reward button to open picker, then numbered picks on draft screen via `OptionSelected` / card holders. |
+| B2 | **Stale overlay buttons** | After leaving loot (or picking a reward), old **1 / 2 / GO** overlays remain visible on the next screen (e.g. card select). Can persist into **main menu** after quitting. | `OverlayModeService` prioritizes `Rewards` over `PileSelect`; `NRewardsScreen` may stay in tree while sub-screens open. `RewardsOverlay.Hide()` not called on every transition. Canvas layers on scene root may outlive run end if `TearDown` skipped. Need: aggressive hide when anchors gone; detect `NCardRewardSelectionScreen` and switch mode; full teardown when `!RunManager.IsInProgress` or rewards screen not visible. |
+| B3 | **Enemy slot order mismatch** | New minions/creatures **are** detected and get a target button, but the number does **not** match left-to-right screen order (leftmost = 1, next = 2, …). After spawns/stacks, card button **3** may hit a different enemy than the one visually third from the left. | `EnemyOrderService` sorts by `CombatId`, not on-screen X. `CombatId` order ≠ visual left-to-right when minions spawn mid-fight or enemies overlap. Fix: map alive `Creature` → `NCreature` node (`Entity` prop), sort by `GlobalPosition.X` (or hitbox center), use same order for card buttons **and** targeting in `CardPlayService`. |
+| B4 | **Large hand — card buttons overlap End Turn** | With 9–10 cards, rightmost (e.g. 9th) card button sits on top of End Turn button. Button row also **drifts upward** along the fan: ~10 px above left cards, ~30 px above right cards. | Buttons centered above card (`GapAboveCard = 28`); fan layout + anchor rect mismatch widens gap on outer cards. End Turn fixed at viewport center (~52% Y). Fix: keep buttons tighter to card top (consistent ~10 px); consider left-side offset (like loot screen) for outer cards; or nudge End Turn when `handSize >= 9`. Files: `CardButtonRow.cs`, `CardAnchorService.cs`, `EndTurnOverlay.cs`. |
+
+### Combat UX — consistency (not started)
+
+| # | Feature | Goal | Approach |
+|---|---------|------|----------|
+| C1 | **Enemy number labels on screen** | Show **1 / 2 / 3 / 4** above each alive enemy so on-screen slot matches card target buttons. | New `EnemyLabelOverlay` in combat play mode: find visible `NCreature` nodes, match `Entity` to `EnemyOrderService` list (after B3 screen-X sort), place small label at `GetTopOfHitbox()` / `Hitbox` rect. Hide when not in combat or enemy dead. Display-only (no dwell needed unless user wants it later). |
+
+### New screens — not started
+
+| # | Screen | Game types (starting points) |
+|---|--------|------------------------------|
+| N1 | Events | `NEventRoom`, `NEventOptionButton` |
+| N2 | Chests / treasure | `NTreasureRoom`, `NTreasureButton`, relic holders |
+| N3 | Shop | `NMerchantRoom`, `NMerchantButton` |
+| N4 | Rest site / fire | `NRestSiteRoom`, `NRestSiteButton` |
+| N5 | Ancient encounters | `NAncientEventLayout`, dialogue hitboxes; may reuse event + loot patterns |
+| N6 | **Back button** (cross-cutting) | `NBackButton` — show whenever visible, any non-combat screen |
+| N7 | **Main menu** | `MainMenuButton`, `MainMenuTextButton`, `MainMenuContinueButton` — dwell buttons for play/continue/settings/etc. when `!RunManager.IsInProgress` |
+| N8 | **View upgrades checkbox** | `UpgradePreviewTickbox` / `NTickbox` on main menu or upgrade screen — dwell toggle for “view upgrades” preview |
+| N9 | **Mid-combat “Choose a Card”** (e.g. Knowledge Demon boss) | During boss fight, modal **Choose a Card** — pick **1 of 2** (sometimes more) offered cards (e.g. Disintegration vs Mind Rot). No numbered overlays today. `NChooseACardSelectionScreen` is already in `IsPileSelectScreen`, but combat may stay in `CombatPlay` mode so `PileSelectOverlay` never wins; hand/End Turn overlays may still show. Need: detect this screen during combat, switch to pile-select overlay, numbered buttons on each offered card, hide combat overlays until choice resolves. |
+
+### Optional / deferred
+
+- Potion slot buttons (under each holder, before popup)
+- Utility bar custom keybindings
+- README update for v0.10.x
+- v0.10.8: longer end-turn/menu dwell + menu activation cooldown (installed when game closed)
+
+---
+
+## 2026-06-17 — Loot Skip via E, enemy slot labels, dwell-time settings, perf trims (v0.10.17)
+
+**Files changed:**
+- New: `RewardSelectionService.cs`, `RewardsScreenQuery.cs`, `ControlHitboxService.cs`, `EnemyLabelOverlay.cs` (185)
+- `RewardsOverlay.cs` (319) — reworked: numbered side buttons for reward choices + **native dwell on the real Skip/Proceed button** (utility-bar method)
+- `EnemyOrderService.cs` (136) — sort alive enemies by on-screen X (B3 fix) + node cache (rescan every 30 frames)
+- `DwellTiming.cs` / `DwellSettings.cs` / `SettingsStore.cs` / `ModConfigEntries.cs` / `ModConfigBridge.cs` — configurable **card** + **End Turn** hover times, **Enemy Slot Numbers** toggle, **Performance Logging** toggle
+- `SettingsOverlay.cs` (659) — F8 panel +/- rows for the two hover times
+- `HandTargetingOverlay.cs` (561) — enemy-label sync in combat play; hide on every transition
+- `OverlayModeService.cs` — pile-select wins over rewards; `NCardRewardSelectionScreen` detected
+- `UtilityBarOverlay.cs` — UI rescan 5→20 frames; `DwellHoverService.cs` — window mouse pos
+- `mod_manifest.json` / `ModEntry.cs` → v0.10.17
+
+**What worked:**
+- **Enemy slot numbers (C1)** above each foe, sorted left-to-right matching card target buttons; toggle in settings; raised 32 px above hitbox.
+- **Loot Skip / post-combat Proceed** now dwells the **real button and presses E** (ForceClick/RewardCollectedFrom did not advance it). User confirmed E is the working activation.
+- **B3** enemy order now by hitbox X, not CombatId.
+- Configurable hover times (card 0.5 s, End Turn 1.15 s defaults) via ModConfig + F8.
+- Perf trims: enemy scan 8→30 frames, utility rescan 5→20, perf logging off by default + toggle. Measured in combat: total ≈6.5 ms/frame, handSync ≈3.4–3.9, getMode ≈0.3, dwell ≈1.8 — comfortably under 16.6 ms.
+
+**Current state:** Green — builds clean (0 warn/0 err). **v0.10.17 DLL build is NOT yet copied in** (game was running, file locked); last installed in-game is v0.10.16. Re-run `install.ps1` with STS2 closed to land the E-key Proceed fix.
+
+**File size flag:** `SettingsOverlay.cs` 659 lines and `HandTargetingOverlay.cs` 561 lines — both >500 (cap 800). Consider extracting before next growth (e.g. split SettingsOverlay panel-build vs input-routing).
+
+**Next session:** Confirm loot Skip/Proceed E-press works in game after install; if loot row hover still wanted, revisit. Then optional: shave `handSync` (rebuild card buttons only on hand change); B1 card-reward draft; remaining screens N1/N6/N7.
+
+---
+
+## 2026-06-15 — v0.10.7 loot GO + potion popup (installed)
+
+**What worked:** GO proceed via `ForceClick`; potion popup Use/Discard numbered buttons; installed v0.10.7.
+
+**Current state:** Partial — loot gold/relic OK; card reward + stale overlays broken (B1, B2).
+
+**Next session:** Fix B1/B2 (loot); B3 (enemy left-to-right order) + C1 (labels on enemies); B4 (large-hand button position); then N6 Back, N7 main menu, N8 view-upgrades tickbox.
+
+---
+
 ## 2026-06-13 — ModConfig, utility bar, button scale/opacity (v0.10.2)
 
 **Files changed:** ModConfigBridge.cs, ModConfigEntries.cs, UtilityBarOverlay.cs (new), GameOverlayVisibility.cs (new), OverlayButtonFactory.cs (new), InputForwardService.cs, ConfirmOverlay.cs, EndTurnOverlay.cs, CardButtonRow.cs, HandTargetingOverlay.cs (~401 lines), SettingsStore.cs, DwellSettings.cs, mod_manifest.json / ModEntry.cs (v0.10.2)
