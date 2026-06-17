@@ -13,6 +13,12 @@ internal static class HandLayoutDiagnostics
 
     internal static void MaybeLog(NPlayerHand hand, IReadOnlyList<NCardHolder> holders)
     {
+        // Calibration-only dump. It writes several lines to disk synchronously on the game thread
+        // every time the hand size changes (i.e. while drawing/playing cards), which caused the
+        // intermittent card-play stutter. Keep it off unless perf/debug logging is explicitly on.
+        if (!SettingsStore.Current.EnablePerfLogging)
+            return;
+
         int handSize = holders.Count(h => h.CardModel != null && NodeQuery.IsVisible(h));
         if (handSize == _lastHandSize)
             return;

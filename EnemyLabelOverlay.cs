@@ -29,7 +29,6 @@ internal static class EnemyLabelOverlay
             return;
 
         _root.Visible = true;
-        EnemyOrderService.DidAliveCountChange(enemies.Count);
         var nodes = EnemyOrderService.GetVisibleEnemyNodesCached();
         int badgeSize = Math.Clamp(SettingsStore.GetCardButtonSize(handSize) - 2, 30, 44);
         float opacity = SettingsStore.GetCardButtonOpacity();
@@ -66,6 +65,13 @@ internal static class EnemyLabelOverlay
 
     internal static void Hide()
     {
+        // Idempotent: when labels are disabled this is called every frame. Doing the teardown work
+        // (and invalidating the shared enemy-node cache) each frame forced a full scene-tree scan
+        // every frame, so bail out cheaply once we're already hidden.
+        bool alreadyHidden = _badges.Count == 0 && (_root == null || !_root.Visible);
+        if (alreadyHidden)
+            return;
+
         foreach (var badge in _badges.Values)
             badge.Dispose();
         _badges.Clear();

@@ -1,23 +1,25 @@
 using Godot;
-using MegaCrit.Sts2.Core.Nodes.Cards;
+using MegaCrit.Sts2.Core.Nodes.Cards.Holders;
+using MegaCrit.Sts2.Core.Nodes.CommonUi;
+using MegaCrit.Sts2.Core.Nodes.GodotExtensions;
+using MegaCrit.Sts2.Core.Nodes.Screens.CardSelection;
 
 namespace DwellTargeting;
 
 /// <summary>
-/// Numbered dwell buttons above cards shown in pile/grid selection screens.
+/// Hover-to-select for cards shown on pile/grid/choose/card-reward selection screens. Cards there are
+/// <see cref="NCardHolder"/> nodes; we register the card body itself as a dwell target (no number
+/// badges — they jumped around with the hover animation and the card body is the natural target).
 /// </summary>
 internal static class PileSelectOverlay
 {
-    private const int GapAboveCard = 28;
-    private const int CanvasLayerOrder = 130;
-
-    private static CanvasLayer? _layer;
-    private static Control? _root;
-    private static readonly Dictionary<ulong, PileCardButton> _buttons = new();
-    private static Node? _cachedScreen;
-    private static List<NCard>? _cachedCards;
-    private static int _framesSinceCardScan;
     private const int CardRescanIntervalFrames = 5;
+
+    private static Node? _cachedScreen;
+    private static List<NCardHolder>? _cachedHolders;
+    private static List<Control>? _cachedConfirmButtons;
+    private static int _framesSinceCardScan;
+    private static long _nextDiagTick;
 
     internal static void Sync()
     {
@@ -27,237 +29,123 @@ internal static class PileSelectOverlay
             return;
         }
 
-        EnsureCanvas();
-        if (_root == null)
-            return;
-
-        _root.Visible = true;
-
         bool screenChanged = _cachedScreen != screen;
         _framesSinceCardScan++;
-        if (screenChanged || _cachedCards == null || _framesSinceCardScan >= CardRescanIntervalFrames)
+        if (screenChanged || _cachedHolders == null || _framesSinceCardScan >= CardRescanIntervalFrames)
         {
             _framesSinceCardScan = 0;
             _cachedScreen = screen;
-            _cachedCards = NodeQuery.FindAll<NCard>(screen)
-                .Where(c => NodeQuery.IsVisible(c) && IsSelectableCard(c))
-                .OrderBy(c => c.GlobalPosition.Y)
-                .ThenBy(c => c.GlobalPosition.X)
-                .ToList();
+            _cachedHolders = FindSelectableHolders(screen);
+            _cachedConfirmButtons = FindConfirmButtons(screen);
         }
 
-        var cards = _cachedCards;
-
-        var liveIds = new HashSet<ulong>();
-        int slot = 1;
-        int buttonSize = ComputeButtonSize(cards.Count);
-
-        foreach (var card in cards)
+        long now = System.Environment.TickCount64;
+        if (now >= _nextDiagTick)
         {
-            ulong id = card.GetInstanceId();
-            liveIds.Add(id);
-
-            if (!_buttons.TryGetValue(id, out var side))
-            {
-                side = new PileCardButton(card, _root);
-                _buttons[id] = side;
-                ModLogger.Info($"Pile select button {slot} for {card.Name}.");
-            }
-
-            side.Sync(slot, buttonSize);
-            slot++;
-        }
-
-        foreach (var pair in _buttons.ToList())
-        {
-            if (!liveIds.Contains(pair.Key))
-            {
-                pair.Value.Dispose();
-                _buttons.Remove(pair.Key);
-            }
+            _nextDiagTick = now + 2000;
+            ModLogger.Info($"[Pile] sync screen={screen.GetType().Name} holders={_cachedHolders.Count} confirm={_cachedConfirmButtons?.Count ?? 0}.");
         }
     }
 
     internal static void CollectDwellTargets(List<DwellHoverService.Target> targets)
     {
-        foreach (var side in _buttons.Values)
-            side.CollectDwellTargets(targets);
+        if (_cachedHolders != null)
+        {
+            int slot = 1;
+            foreach (var holder in _cachedHolders)
+            {
+                if (!NodeQuery.IsLive(holder))
+                {
+                    slot++;
+                    continue;
+                }
+
+                if (CardAnchorService.TryGetCardRect(holder, out var cardRect)
+                    && cardRect.Size.X >= 8f && cardRect.Size.Y >= 8f)
+                {
+                    var captured = holder;
+                    int capturedSlot = slot;
+                    // Menu timing (slower + cooldown) so a card pick is deliberate, not instant.
+                    targets.Add(DwellHoverService.Menu(
+                        cardRect,
+                        () => PileCardSelectionService.TrySelect(captured, capturedSlot),
+                        $"PileCard:{slot}"));
+                }
+
+                slot++;
+            }
+        }
+
+        if (_cachedConfirmButtons != null)
+        {
+            foreach (var button in _cachedConfirmButtons)
+            {
+                if (!NodeQuery.IsLive(button) || !NodeQuery.IsVisible(button))
+                    continue;
+                if (button is NClickableControl { IsEnabled: false })
+                    continue;
+
+                if (ControlHitboxService.TryGetDwellRect(button, out var rect))
+                {
+                    var captured = button;
+                    targets.Add(DwellHoverService.Menu(
+                        rect,
+                        () => InputForwardService.TryActivateControl(captured),
+                        $"PileConfirm:{button.Name}"));
+                }
+            }
+        }
     }
 
     internal static void Hide()
     {
-        foreach (var side in _buttons.Values)
-            side.Dispose();
-        _buttons.Clear();
         _cachedScreen = null;
-        _cachedCards = null;
+        _cachedHolders = null;
+        _cachedConfirmButtons = null;
         _framesSinceCardScan = 0;
-
-        if (_root != null && NodeQuery.IsLive(_root))
-            _root.Visible = false;
     }
 
     internal static bool TryRouteClick(Vector2 globalPos, out string message)
     {
         message = string.Empty;
-        foreach (var side in _buttons.Values)
-        {
-            if (side.TryActivateAt(globalPos, out message))
-                return true;
-        }
-
         return false;
     }
 
-    private static bool IsSelectableCard(NCard card)
+    // Keep scene-tree order (stable across rescans).
+    private static List<NCardHolder> FindSelectableHolders(Node screen) =>
+        NodeQuery.FindAll<NCardHolder>(screen)
+            .Where(IsSelectableHolder)
+            .ToList();
+
+    // The post-selection Confirm / Skip / Proceed buttons on these screens are NButton/NClickableControl,
+    // so a ForceClick activates them (the "E" key does not work for the user's card-reward proceed).
+    private static List<Control> FindConfirmButtons(Node screen)
     {
-        if (card is not Control control)
+        var list = new List<Control>();
+
+        foreach (var b in NodeQuery.FindAll<NConfirmButton>(screen))
+            if (b is Control c && NodeQuery.IsVisible(c))
+                list.Add(c);
+
+        foreach (var b in NodeQuery.FindAll<NChoiceSelectionSkipButton>(screen))
+            if (b is Control c && NodeQuery.IsVisible(c))
+                list.Add(c);
+
+        foreach (var b in NodeQuery.FindAll<NProceedButton>(screen))
+            if (b is Control c && NodeQuery.IsVisible(c))
+                list.Add(c);
+
+        return list;
+    }
+
+    private static bool IsSelectableHolder(NCardHolder holder)
+    {
+        if (!NodeQuery.IsLive(holder) || !NodeQuery.IsVisible(holder))
             return false;
-
-        var rect = control.GetGlobalRect();
-        return rect.Size.X >= 80f && rect.Size.Y >= 100f;
-    }
-
-    private static int ComputeButtonSize(int cardCount) =>
-        cardCount >= 12 ? 26 : cardCount >= 8 ? 30 : cardCount >= 5 ? 34 : 38;
-
-    private static void EnsureCanvas()
-    {
-        if (_layer != null && NodeQuery.IsLive(_layer) && _root != null && NodeQuery.IsLive(_root))
-            return;
-
-        var tree = Engine.GetMainLoop() as SceneTree;
-        if (tree?.Root == null)
-            return;
-
-        _layer = new CanvasLayer { Layer = CanvasLayerOrder, Name = "DwellPileSelectLayer" };
-        tree.Root.AddChild(_layer);
-
-        _root = new Control
-        {
-            Name = "DwellPileSelectRoot",
-            MouseFilter = Control.MouseFilterEnum.Ignore
-        };
-        _root.SetAnchorsPreset(Control.LayoutPreset.FullRect);
-        _layer.AddChild(_root);
-        ModLogger.Info("Pile select overlay canvas created.");
-    }
-
-    private sealed class PileCardButton
-    {
-        private readonly NCard _card;
-        private readonly Control _host;
-        private Button? _button;
-        private int _slot;
-
-        internal PileCardButton(NCard card, Control root)
-        {
-            _card = card;
-            _host = new Control
-            {
-                Name = $"DwellPileBtn_{card.GetInstanceId()}",
-                MouseFilter = Control.MouseFilterEnum.Ignore,
-                ZIndex = 200
-            };
-            root.AddChild(_host);
-        }
-
-        internal void Sync(int slot, int buttonSize)
-        {
-            _slot = slot;
-            EnsureButton(buttonSize);
-            PositionButton();
-        }
-
-        internal void CollectDwellTargets(List<DwellHoverService.Target> targets)
-        {
-            if (_button == null || !NodeQuery.IsLive(_button) || !_button.Visible)
-                return;
-
-            var rect = _button.GetGlobalRect();
-            targets.Add(DwellHoverService.Card(
-                rect,
-                () => PileCardSelectionService.TrySelect(_card, _slot),
-                $"Pile:{_slot}"));
-        }
-
-        internal bool TryActivateAt(Vector2 globalPos, out string message)
-        {
-            message = string.Empty;
-            if (_button == null || !NodeQuery.IsLive(_button) || !_button.Visible)
-                return false;
-
-            if (!_button.GetGlobalRect().HasPoint(globalPos))
-                return false;
-
-            message = $"Pile select slot {_slot}";
-            PileCardSelectionService.TrySelect(_card, _slot);
-            return true;
-        }
-
-        internal void Dispose()
-        {
-            if (NodeQuery.IsLive(_host))
-                _host.QueueFree();
-            _button = null;
-        }
-
-        private void EnsureButton(int buttonSize)
-        {
-            if (_button != null && NodeQuery.IsLive(_button))
-            {
-                _button.Text = _slot.ToString();
-                _button.CustomMinimumSize = new Vector2(buttonSize, buttonSize);
-                _button.Visible = true;
-                return;
-            }
-
-            int fontSize = Math.Max(12, buttonSize / 2);
-            _button = new Button
-            {
-                Text = _slot.ToString(),
-                CustomMinimumSize = new Vector2(buttonSize, buttonSize),
-                FocusMode = Control.FocusModeEnum.None,
-                MouseFilter = Control.MouseFilterEnum.Stop,
-                ZIndex = 2
-            };
-
-            var style = new StyleBoxFlat
-            {
-                BgColor = new Color(0.08f, 0.1f, 0.14f, 0.95f),
-                BorderColor = new Color(0.45f, 0.85f, 1f, 1f),
-                BorderWidthBottom = 2,
-                BorderWidthTop = 2,
-                BorderWidthLeft = 2,
-                BorderWidthRight = 2,
-                CornerRadiusBottomLeft = 8,
-                CornerRadiusBottomRight = 8,
-                CornerRadiusTopLeft = 8,
-                CornerRadiusTopRight = 8
-            };
-            _button.AddThemeStyleboxOverride("normal", style);
-            _button.AddThemeStyleboxOverride("hover", style);
-            _button.AddThemeStyleboxOverride("pressed", style);
-            _button.AddThemeStyleboxOverride("focus", style);
-            _button.AddThemeFontSizeOverride("font_size", fontSize);
-            _button.Pressed += () => PileCardSelectionService.TrySelect(_card, _slot);
-            _host.AddChild(_button);
-        }
-
-        private void PositionButton()
-        {
-            if (_button == null || _card is not Control cardControl || !NodeQuery.IsLive(cardControl))
-                return;
-
-            var targetRect = cardControl.GetGlobalRect();
-            _button.ResetSize();
-            var size = _button.GetCombinedMinimumSize();
-            float centerX = targetRect.Position.X + (targetRect.Size.X / 2f);
-            float x = centerX - (size.X / 2f);
-            float y = targetRect.Position.Y - GapAboveCard - size.Y;
-            _button.GlobalPosition = new Vector2(x, y);
-            _button.Size = size;
-            _button.Visible = true;
-        }
+        if (holder.CardModel == null)
+            return false;
+        if (!CardAnchorService.TryGetCardRect(holder, out var rect))
+            return false;
+        return rect.Size.X >= 60f && rect.Size.Y >= 80f;
     }
 }

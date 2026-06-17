@@ -2,8 +2,10 @@ using Godot;
 using MegaCrit.Sts2.Core.Combat;
 using MegaCrit.Sts2.Core.Nodes.Combat;
 using MegaCrit.Sts2.Core.Nodes.Rewards;
+using MegaCrit.Sts2.Core.Nodes.Rooms;
 using MegaCrit.Sts2.Core.Nodes.Screens;
 using MegaCrit.Sts2.Core.Nodes.Screens.CardSelection;
+using MegaCrit.Sts2.Core.Nodes.Screens.Map;
 using MegaCrit.Sts2.Core.Runs;
 
 namespace DwellTargeting;
@@ -14,7 +16,9 @@ internal enum OverlayMode
     CombatPlay,
     HandSelect,
     PileSelect,
-    Rewards
+    Rewards,
+    Map,
+    Event
 }
 
 internal static class OverlayModeService
@@ -27,6 +31,8 @@ internal static class OverlayModeService
     private static int _cachedInvalidationKey = int.MinValue;
     private static NRewardsScreen? _cachedRewardsScreen;
     private static Node? _cachedPileSelectScreen;
+    private static NMapScreen? _cachedMapScreen;
+    private static NEventRoom? _cachedEventRoom;
 
     internal static OverlayMode GetMode()
     {
@@ -65,6 +71,24 @@ internal static class OverlayModeService
         return false;
     }
 
+    internal static NMapScreen? GetCachedMapScreen()
+    {
+        GetMode();
+        if (_cachedMapScreen != null && NodeQuery.IsLive(_cachedMapScreen))
+            return _cachedMapScreen;
+
+        return null;
+    }
+
+    internal static NEventRoom? GetCachedEventRoom()
+    {
+        GetMode();
+        if (_cachedEventRoom != null && NodeQuery.IsLive(_cachedEventRoom))
+            return _cachedEventRoom;
+
+        return null;
+    }
+
     internal static NRewardsScreen? GetCachedRewardsScreen()
     {
         GetMode();
@@ -77,12 +101,17 @@ internal static class OverlayModeService
         return null;
     }
 
+    internal static string DebugSnapshot() =>
+        $"mode={_cachedMode} rewards={_cachedRewardsScreen != null} pile={_cachedPileSelectScreen != null} map={_cachedMapScreen != null} event={_cachedEventRoom != null}";
+
     internal static void InvalidateCache()
     {
         _cachedInvalidationKey = int.MinValue;
         _cachedFrame = 0;
         _cachedRewardsScreen = null;
         _cachedPileSelectScreen = null;
+        _cachedMapScreen = null;
+        _cachedEventRoom = null;
     }
 
     private static int ComputeInvalidationKey()
@@ -114,6 +143,8 @@ internal static class OverlayModeService
         _cachedTick = now;
         _cachedRewardsScreen = null;
         _cachedPileSelectScreen = null;
+        _cachedMapScreen = null;
+        _cachedEventRoom = null;
         _cachedMode = OverlayMode.None;
 
         if (!RunManager.Instance.IsInProgress)
@@ -134,6 +165,20 @@ internal static class OverlayModeService
         if (_cachedRewardsScreen != null)
         {
             _cachedMode = OverlayMode.Rewards;
+            return;
+        }
+
+        if (_cachedMapScreen != null)
+        {
+            _cachedMode = OverlayMode.Map;
+            return;
+        }
+
+        // Events are the lowest-priority screen: only show event option dwell when no card/reward/map
+        // screen is up and we're not inside an embedded event combat.
+        if (_cachedEventRoom != null && !CombatManager.Instance.IsInProgress)
+        {
+            _cachedMode = OverlayMode.Event;
             return;
         }
 
@@ -162,13 +207,25 @@ internal static class OverlayModeService
         if (!NodeQuery.IsLive(node))
             return;
 
-        if (node is NRewardsScreen rewards && NodeQuery.IsLive(rewards))
+        if (node is NRewardsScreen rewards && NodeQuery.IsLive(rewards)
+            && NodeQuery.IsVisible(rewards) && RewardsScreenQuery.HasVisibleChoices(rewards))
         {
-            if (_cachedRewardsScreen == null || NodeQuery.IsVisible(rewards))
-                _cachedRewardsScreen = rewards;
+            // Only treat a rewards screen as active if it still has real choices (reward buttons or
+            // a live proceed/skip). A claimed/empty ghost screen left in the tree must NOT win, or it
+            // blocks pile-select (card draft) and map modes from ever activating.
+            _cachedRewardsScreen = rewards;
+        }
+        else if (_cachedMapScreen == null && node is NMapScreen mapScreen
+            && NodeQuery.IsLive(mapScreen) && NodeQuery.IsVisible(mapScreen)
+            && mapScreen is { IsOpen: true, IsTravelEnabled: true })
+        {
+            _cachedMapScreen = mapScreen;
         }
         else if (_cachedPileSelectScreen == null && node is CanvasItem canvas && NodeQuery.IsVisible(canvas) && IsPileSelectScreen(node))
             _cachedPileSelectScreen = node;
+        else if (_cachedEventRoom == null && node is NEventRoom eventRoom
+            && NodeQuery.IsLive(eventRoom) && NodeQuery.IsVisible(eventRoom))
+            _cachedEventRoom = eventRoom;
 
         if (_cachedRewardsScreen != null && _cachedPileSelectScreen != null)
             return;

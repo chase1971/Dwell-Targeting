@@ -7,7 +7,7 @@ namespace DwellTargeting;
 
 internal static class EnemyOrderService
 {
-    private const int NodeScanIntervalFrames = 30;
+    private const int NodeScanIntervalFrames = 90;
 
     private static readonly List<NCreature> _cachedNodes = new();
     private static int _framesSinceNodeScan;
@@ -24,6 +24,10 @@ internal static class EnemyOrderService
         var alive = combatState.Enemies
             .Where(creature => creature.IsAlive)
             .ToList();
+
+        // Keep the node cache fresh on spawn/death here so ordering stays correct even when the
+        // enemy-label overlay is disabled (it no longer drives cache invalidation every frame).
+        DidAliveCountChange(alive.Count);
 
         if (alive.Count <= 1)
             return alive;
@@ -58,10 +62,23 @@ internal static class EnemyOrderService
         if (_lastAliveCount == aliveCount)
             return false;
 
+        bool increased = _lastAliveCount >= 0 && aliveCount > _lastAliveCount;
         _lastAliveCount = aliveCount;
-        InvalidateNodeCache();
+
+        // Enemy spawned: force a fresh scan so the new node gets ordered/labelled.
+        // Enemy died (or first read): survivors keep their relative left-to-right order, so just
+        // drop the dead nodes from the cache instead of paying for a full scene-tree walk on the
+        // death frame (that walk was the big FPS hitch when an enemy dies).
+        if (increased)
+            InvalidateNodeCache();
+        else
+            PruneDeadNodes();
+
         return true;
     }
+
+    private static void PruneDeadNodes() =>
+        _cachedNodes.RemoveAll(node => !IsVisibleEnemyNode(node));
 
     internal static List<NCreature> FindVisibleEnemyNodes()
     {

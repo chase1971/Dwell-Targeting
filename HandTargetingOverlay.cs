@@ -66,6 +66,10 @@ internal static class HandTargetingOverlay
             RewardsOverlay.CollectDwellTargets(targets);
         else if (mode == OverlayMode.PileSelect)
             PileSelectOverlay.CollectDwellTargets(targets);
+        else if (mode == OverlayMode.Map)
+            MapOverlay.CollectDwellTargets(targets);
+        else if (mode == OverlayMode.Event)
+            EventOverlay.CollectDwellTargets(targets);
         else
         {
             PotionPopupOverlay.CollectDwellTargets(targets);
@@ -191,7 +195,7 @@ internal static class HandTargetingOverlay
             OverlayPerfDiagnostics.AddCategory("getMode", getModeStart);
 
             bool showUtility = RunManager.Instance.IsInProgress
-                && mode is not OverlayMode.Rewards and not OverlayMode.PileSelect;
+                && mode is not OverlayMode.Rewards and not OverlayMode.PileSelect and not OverlayMode.Map and not OverlayMode.Event;
             UtilityBarOverlay.Sync(showUtility);
 
             if (mode == OverlayMode.None)
@@ -207,6 +211,13 @@ internal static class HandTargetingOverlay
 
             if (_activeOverlayMode != mode)
             {
+                ModLogger.Info($"[Mode] {_activeOverlayMode} -> {mode} ({OverlayModeService.DebugSnapshot()})");
+
+                // A selection screen just appeared — block accidental instant picks until the
+                // cursor settles and moves again.
+                if (mode is OverlayMode.Rewards or OverlayMode.PileSelect or OverlayMode.Map or OverlayMode.Event)
+                    DwellHoverService.ArmGrace(1.0f);
+
                 _isTornDown = false;
                 _activeOverlayMode = mode;
             }
@@ -227,8 +238,24 @@ internal static class HandTargetingOverlay
                 return;
             }
 
+            if (mode == OverlayMode.Map)
+            {
+                SyncMapMode();
+                FinalizeDwellTargets();
+                return;
+            }
+
+            if (mode == OverlayMode.Event)
+            {
+                SyncEventMode();
+                FinalizeDwellTargets();
+                return;
+            }
+
             RewardsOverlay.Hide();
             PileSelectOverlay.Hide();
+            MapOverlay.Hide();
+            EventOverlay.Hide();
 
             var hand = NPlayerHand.Instance;
             if (hand == null)
@@ -296,7 +323,9 @@ internal static class HandTargetingOverlay
 
     private static void SyncPileSelectMode()
     {
-        DwellHoverService.Reset();
+        // NOTE: do NOT call DwellHoverService.Reset() here — this runs every frame, and resetting
+        // every frame zeroes the dwell timer before it can ever reach the activation threshold
+        // (that bug made native dwell unusable on the rewards / pile-select screens).
         HandInputBlocker.Release();
         MouseCardPlayBlocker.Release();
         HandLayoutDiagnostics.Reset();
@@ -305,13 +334,50 @@ internal static class HandTargetingOverlay
         ClearHandRows();
         EnemyLabelOverlay.Hide();
         RewardsOverlay.Hide();
+        MapOverlay.Hide();
+        EventOverlay.Hide();
         PileSelectOverlay.Sync();
         UtilityBarOverlay.Sync(RunManager.Instance.IsInProgress);
     }
 
+    private static void SyncMapMode()
+    {
+        // NOTE: like the rewards/pile screens, do NOT reset the dwell service every frame here.
+        HandInputBlocker.Release();
+        MouseCardPlayBlocker.Release();
+        HandLayoutDiagnostics.Reset();
+        EndTurnOverlay.Hide();
+        ConfirmOverlay.Hide();
+        ClearHandRows();
+        EnemyLabelOverlay.Hide();
+        RewardsOverlay.Hide();
+        PileSelectOverlay.Hide();
+        EventOverlay.Hide();
+        MapOverlay.Sync();
+    }
+
+    private static void SyncEventMode()
+    {
+        // NOTE: like the rewards/pile/map screens, do NOT reset the dwell service every frame here.
+        HandInputBlocker.Release();
+        MouseCardPlayBlocker.Release();
+        HandLayoutDiagnostics.Reset();
+        EndTurnOverlay.Hide();
+        ConfirmOverlay.Hide();
+        ClearHandRows();
+        EnemyLabelOverlay.Hide();
+        RewardsOverlay.Hide();
+        PileSelectOverlay.Hide();
+        MapOverlay.Hide();
+        EventOverlay.Sync();
+    }
+
     private static void SyncRewardsMode()
     {
-        DwellHoverService.Reset();
+        // NOTE: do NOT call DwellHoverService.Reset() here — see SyncPileSelectMode. Resetting every
+        // frame is what kept the native Proceed/Skip dwell from ever firing.
+        MapOverlay.Hide();
+        EventOverlay.Hide();
         HandInputBlocker.Release();
         MouseCardPlayBlocker.Release();
         HandLayoutDiagnostics.Reset();
@@ -536,6 +602,8 @@ internal static class HandTargetingOverlay
         UtilityBarOverlay.Hide();
         PotionPopupOverlay.Hide();
         EnemyLabelOverlay.Hide();
+        MapOverlay.Hide();
+        EventOverlay.Hide();
         ClearHandRows();
         _isTornDown = true;
         _activeOverlayMode = OverlayMode.None;
@@ -552,6 +620,8 @@ internal static class HandTargetingOverlay
         ConfirmOverlay.Hide();
         RewardsOverlay.Hide();
         PileSelectOverlay.Hide();
+        MapOverlay.Hide();
+        EventOverlay.Hide();
         PotionPopupOverlay.Hide();
         EnemyLabelOverlay.Hide();
         ClearHandRows();

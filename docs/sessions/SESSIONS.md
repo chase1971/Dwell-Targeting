@@ -40,6 +40,38 @@
 
 ---
 
+## 2026-06-17 (evening) — Map, card-select, events, proceed/confirm hover + perf (v0.10.18 → v0.10.30)
+
+**Files changed:**
+- New: `MapOverlay.cs` (175), `MapSelectionService.cs` (24), `MapScrollService.cs` (25), `EventOverlay.cs` (82), `EventSelectionService.cs` (21)
+- `OverlayModeService.cs` (214) — added `Map` + `Event` modes; ghost-rewards fix (rewards only counts with `HasVisibleChoices`); `DebugSnapshot()`
+- `HandTargetingOverlay.cs` (525) — wired Map + Event sync paths, `ArmGrace` on screen open, `[Mode]` transition logging; removed per-frame `DwellHoverService.Reset()` from pile/rewards sync (the bug that kept native dwell from ever firing)
+- `PileSelectOverlay.cs` (131) — **rewritten**: finds `NCardHolder` (not raw `NCard`), no number badges, card-body dwell at Menu timing, plus Confirm/Skip/Proceed buttons
+- `PileCardSelectionService.cs` (49) — select via holder `Pressed` signal (NClickableControl hitbox has no Pressed; ForceClick didn't drive it)
+- `DwellHoverService.cs` (147) — dwell grace/hysteresis + screen-open `ArmGrace` (suppress ~1 s + require cursor move)
+- `RewardsOverlay.cs` (320) — loot-item hover-select; padded Proceed hitbox; proceed diagnostics
+- `EnemyOrderService.cs` / `EnemyLabelOverlay.cs` / `HandLayoutDiagnostics.cs` — perf: idempotent Hide, prune-on-death vs full rescan, scan interval 30→90, gated diag disk writes
+- `mod_manifest.json` / `ModEntry.cs` → v0.10.30
+
+**What worked (user-confirmed):**
+- **Map**: hover-to-select travelable nodes + off-to-the-side ▲/▼ hover-scroll arrows (default slowed to every 3rd frame).
+- **Card-select hover** now works (root cause: cards are `NCardHolder`, select via holder `Pressed` signal). Badges removed; hover the card body. Dwell moved to Menu timing so picks aren't instant.
+- **Loot card/item hover-select**.
+- Ghost rewards screen no longer blocks pile/map modes.
+
+**Shipped this session, not yet user-tested:**
+- **Events (N1)**: `NEventRoom` → `Event` mode, hover option buttons (`NEventOptionButton`, ForceClick).
+- **Pile Confirm/Skip/Proceed** buttons (`NConfirmButton`/`NChoiceSelectionSkipButton`/`NProceedButton`) as dwell targets (ForceClick, since "E" didn't work for card-reward proceed).
+
+**Current state:** Green — builds 0 errors/0 warnings, installed v0.10.30.
+
+**File size flag:** `HandTargetingOverlay.cs` 525 (>500, grew ~+90 this session — watch; extract a mode-dispatch helper if it keeps growing). `SettingsOverlay.cs` 659 (unchanged). All others <350.
+
+**Next session:**
+1. User to test event flow: options → choose-a-card → end Proceed/Confirm.
+2. Optional: scroll-speed slider in F8 (map scroll currently a fixed slower default).
+3. Backlog still open: shops (N3), rest sites (N4), chests (N2), back button (N6), main menu (N7), mid-combat Choose-a-Card (N9).
+
 ## 2026-06-17 — Loot Skip via E, enemy slot labels, dwell-time settings, perf trims (v0.10.17)
 
 **Files changed:**

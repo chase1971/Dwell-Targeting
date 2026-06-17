@@ -13,7 +13,7 @@ public static class ModEntry
         HandTargetingOverlay.EnsureInitialized();
         ModConfigBridge.DeferredRegister();
         ModManagerSettingsBridge.ScheduleRegistration();
-        ModLogger.Info("v0.10.17 loaded — Proceed/Skip dwell presses E accept key.");
+        ModLogger.Info("v0.10.30 loaded — event option hover, pile confirm/proceed hover, slower card dwell.");
         ModLogger.Info($"Settings file: {SettingsStore.SettingsFilePath}");
         ModLogger.Info($"Log file: {System.IO.Path.Combine(System.Environment.GetFolderPath(System.Environment.SpecialFolder.ApplicationData), "SlayTheSpire2", "logs", "dwell-targeting.log")}");
     }

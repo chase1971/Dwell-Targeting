@@ -15,11 +15,14 @@ internal static class RewardsOverlay
     private const int ButtonSize = 44;
     private const int CanvasLayerOrder = 130;
     private const int SideOffset = 72;
+    private const float ProceedHitboxPadding = 24f;
 
     private static CanvasLayer? _layer;
     private static Control? _root;
     private static readonly Dictionary<ulong, RewardSideButton> _sideButtons = new();
     private static NProceedButton? _proceedButton;
+    private static long _nextProceedDiagTick;
+    private static bool _lastInsideProceed;
 
     internal static void Sync()
     {
@@ -64,6 +67,47 @@ internal static class RewardsOverlay
                 _sideButtons.Remove(pair.Key);
             }
         }
+
+        LogProceedDiagnostic();
+    }
+
+    /// <summary>
+    /// Throttled trace of the Proceed/Skip button state + whether the cursor is inside its dwell rect,
+    /// so we can see exactly what (if anything) happens when the mouse hovers it.
+    /// </summary>
+    private static void LogProceedDiagnostic()
+    {
+        long now = System.Environment.TickCount64;
+
+        if (_proceedButton == null)
+        {
+            if (now < _nextProceedDiagTick)
+                return;
+            _nextProceedDiagTick = now + 1000;
+            ModLogger.Info("[ProceedDiag] proceed button = null (none found on this rewards screen).");
+            _lastInsideProceed = false;
+            return;
+        }
+
+        bool live = NodeQuery.IsLive(_proceedButton);
+        bool visible = live && NodeQuery.IsVisible(_proceedButton);
+        bool enabled = _proceedButton is not NClickableControl { IsEnabled: false };
+        bool hasRect = TryGetProceedRect(out var rect);
+        var mouse = DwellHoverService.GetMousePosition();
+        bool inside = hasRect && mouse != null && rect.HasPoint(mouse.Value);
+
+        // Always log the moment the cursor enters/leaves the proceed rect; otherwise throttle to ~1s.
+        bool edge = inside != _lastInsideProceed;
+        _lastInsideProceed = inside;
+        if (!edge && now < _nextProceedDiagTick)
+            return;
+        _nextProceedDiagTick = now + 1000;
+
+        ModLogger.Info(
+            $"[ProceedDiag] name={_proceedButton.Name} live={live} visible={visible} enabled={enabled} " +
+            $"hasRect={hasRect} rect=({rect.Position.X:F0},{rect.Position.Y:F0},{rect.Size.X:F0}x{rect.Size.Y:F0}) " +
+            $"mouse=({(mouse?.X ?? -1f):F0},{(mouse?.Y ?? -1f):F0}) insideProceed={inside} " +
+            $"menuCooldown={DwellActivationCooldown.IsMenuBlocked} sideButtons={_sideButtons.Count}");
     }
 
     internal static void CollectDwellTargets(List<DwellHoverService.Target> targets)
@@ -151,14 +195,24 @@ internal static class RewardsOverlay
             return false;
 
         rect = _proceedButton.GetGlobalRect();
-        return rect.Size.X >= 8f && rect.Size.Y >= 8f;
+        if (rect.Size.X < 8f || rect.Size.Y < 8f)
+            return false;
+
+        // The button has a hover/pulse animation (~±7 px) and the head-mouse wobbles; pad the dwell
+        // hitbox so the cursor stays "inside" instead of flickering across the edge.
+        rect = rect.Grow(ProceedHitboxPadding);
+        return true;
     }
 
     private static void ActivateProceed()
     {
         if (_proceedButton == null || !NodeQuery.IsLive(_proceedButton))
+        {
+            ModLogger.Warn("[ProceedDiag] ActivateProceed fired but proceed button missing/dead.");
             return;
+        }
 
+        ModLogger.Info($"[ProceedDiag] ActivateProceed firing on '{_proceedButton.Name}'.");
         RewardSelectionService.TryProceed(_proceedButton);
     }
 
@@ -218,6 +272,14 @@ internal static class RewardsOverlay
                 return;
 
             targets.Add(DwellHoverService.Card(_button.GetGlobalRect(), Activate, $"Reward:{_label}"));
+
+            // Also let dwelling directly on the loot item itself select it. These items have no
+            // keybind, so we route the hover to the same proven claim path the number button uses.
+            if (_rewardTarget != null && NodeQuery.IsLive(_rewardTarget) && NodeQuery.IsVisible(_rewardTarget)
+                && ControlHitboxService.TryGetDwellRect(_rewardTarget, out var itemRect))
+            {
+                targets.Add(DwellHoverService.Card(itemRect, Activate, $"RewardItem:{_label}"));
+            }
         }
 
         internal bool ContainsPoint(Vector2 globalPos) =>
