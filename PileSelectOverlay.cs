@@ -7,9 +7,9 @@ using MegaCrit.Sts2.Core.Nodes.Screens.CardSelection;
 namespace DwellTargeting;
 
 /// <summary>
-/// Hover-to-select for cards shown on pile/grid/choose/card-reward selection screens. Cards there are
+/// Hover-to-select for cards on pile/grid/choose/card-reward selection screens. Cards there are
 /// <see cref="NCardHolder"/> nodes; we register the card body itself as a dwell target (no number
-/// badges — they jumped around with the hover animation and the card body is the natural target).
+/// badges — the user wants to hover the card directly, the same way the loot rewards work).
 /// </summary>
 internal static class PileSelectOverlay
 {
@@ -20,6 +20,7 @@ internal static class PileSelectOverlay
     private static List<Control>? _cachedConfirmButtons;
     private static int _framesSinceCardScan;
     private static long _nextDiagTick;
+    private static bool _loggedButtonTypes;
 
     internal static void Sync()
     {
@@ -30,6 +31,9 @@ internal static class PileSelectOverlay
         }
 
         bool screenChanged = _cachedScreen != screen;
+        if (screenChanged)
+            _loggedButtonTypes = false;
+
         _framesSinceCardScan++;
         if (screenChanged || _cachedHolders == null || _framesSinceCardScan >= CardRescanIntervalFrames)
         {
@@ -44,7 +48,15 @@ internal static class PileSelectOverlay
         {
             _nextDiagTick = now + 2000;
             ModLogger.Info($"[Pile] sync screen={screen.GetType().Name} holders={_cachedHolders.Count} confirm={_cachedConfirmButtons?.Count ?? 0}.");
+
+            if ((_cachedConfirmButtons?.Count ?? 0) == 0 && !_loggedButtonTypes)
+            {
+                _loggedButtonTypes = true;
+                LogButtonLikeTypes(screen);
+            }
         }
+
+        LeftHoverScrollOverlay.SyncPileSelect();
     }
 
     internal static void CollectDwellTargets(List<DwellHoverService.Target> targets)
@@ -103,6 +115,8 @@ internal static class PileSelectOverlay
         _cachedHolders = null;
         _cachedConfirmButtons = null;
         _framesSinceCardScan = 0;
+        _loggedButtonTypes = false;
+        LeftHoverScrollOverlay.Hide();
     }
 
     internal static bool TryRouteClick(Vector2 globalPos, out string message)
@@ -135,7 +149,68 @@ internal static class PileSelectOverlay
             if (b is Control c && NodeQuery.IsVisible(c))
                 list.Add(c);
 
+        // The card-reward "Choose a Card" Skip is an NCardRewardAlternativeButton (no shared base we
+        // can reference here), so match it by type name and treat it as a skip/confirm target.
+        AddControlsByTypeName(screen, list, "NCardRewardAlternativeButton");
+
         return list;
+    }
+
+    private static void AddControlsByTypeName(Node node, List<Control> list, string typeName)
+    {
+        if (!NodeQuery.IsLive(node))
+            return;
+
+        if (node is Control control
+            && node.GetType().Name == typeName
+            && NodeQuery.IsVisible(control)
+            && control is not NClickableControl { IsEnabled: false }
+            && !list.Contains(control))
+        {
+            list.Add(control);
+        }
+
+        try
+        {
+            foreach (var child in node.GetChildren())
+                AddControlsByTypeName(child, list, typeName);
+        }
+        catch
+        {
+            /* disposed mid-walk */
+        }
+    }
+
+    private static void LogButtonLikeTypes(Node screen)
+    {
+        var seen = new HashSet<string>();
+        CollectButtonLikeTypes(screen, seen);
+        ModLogger.Info($"[Pile] no confirm/skip found. Button-like node types under {screen.GetType().Name}: {string.Join(", ", seen)}");
+    }
+
+    private static void CollectButtonLikeTypes(Node node, HashSet<string> seen)
+    {
+        if (!NodeQuery.IsLive(node))
+            return;
+
+        string name = node.GetType().Name;
+        if (name.Contains("Button", StringComparison.Ordinal)
+            || name.Contains("Skip", StringComparison.Ordinal)
+            || name.Contains("Proceed", StringComparison.Ordinal)
+            || name.Contains("Confirm", StringComparison.Ordinal))
+        {
+            seen.Add(name);
+        }
+
+        try
+        {
+            foreach (var child in node.GetChildren())
+                CollectButtonLikeTypes(child, seen);
+        }
+        catch
+        {
+            /* disposed mid-walk */
+        }
     }
 
     private static bool IsSelectableHolder(NCardHolder holder)

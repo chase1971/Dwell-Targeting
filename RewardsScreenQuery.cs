@@ -94,4 +94,8 @@ internal static class RewardsScreenQuery
     private static bool IsLiveChoice(Control control) =>
         NodeQuery.IsVisible(control)
         && control is not MegaCrit.Sts2.Core.Nodes.GodotExtensions.NClickableControl { IsEnabled: false };
+
+    /// <summary>Reward still on screen and clickable (claimed/greyed rewards are excluded).</summary>
+    internal static bool IsSelectableReward(NRewardButton reward) =>
+        NodeQuery.IsLive(reward) && IsLiveChoice(reward);
 }

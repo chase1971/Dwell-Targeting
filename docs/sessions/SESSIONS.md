@@ -40,6 +40,34 @@
 
 ---
 
+## 2026-06-19 — Async logger + perf, rooms, universal back button, combat bleed-through, ancient numbers (v0.10.31 → v0.10.37)
+
+**Files changed:**
+- New: `RoomOverlay.cs` (161), `BackButtonOverlay.cs` (85), `CombatViewSuppressionQuery.cs` (61)
+- `ModLogger.cs` — async buffered queue + 250 ms background flush (per-line disk I/O was a combat-lag source); `GD.Print` only for WARN/ERROR
+- `OverlayPerfDiagnostics.cs` — named ms + call-count buckets, 3 s summary; `NodeQuery.cs` — tree-walk counters (FindAll calls / nodes visited)
+- `OverlayModeService.cs` (319) — travelable map now outranks a lingering rewards screen (bleed-through fix); added `Room` mode (`NRestSiteRoom` / `NTreasureRoom`, lowest priority)
+- `RewardsOverlay.cs` — removed number buttons (direct hover-to-claim); per-item vertically-clipped hitboxes (hover item 2 no longer claims item 1)
+- `PileSelectOverlay.cs` — reverted to direct card-body hover; card-reward Skip (`NCardRewardAlternativeButton`) now hoverable
+- `EventOverlay.cs` (240) — ancient events (`AncientEventOptionButton`) use gold offset number buttons (hover option = relic tooltip, dwell the number = pick); normal events keep direct hover
+- `RoomOverlay.cs` — rest-site options (`NRestSiteButton`), treasure/chest (`NTreasureButton` + generic clickable pass for the relic), proceed via E key
+- `HandTargetingOverlay.cs` (755) — wired Room mode, universal Back button (`NBackButton`), combat-view suppression (deck/draw/exhaust/pile/map opened over combat)
+- `ModEntry.cs` / `mod_manifest.json` → v0.10.37
+
+**What worked (user-confirmed):**
+- Lag: async logger removed the combat stall ("didn't stick out").
+- Rest-site options + proceed (E key) confirmed working in the log; map/rewards bleed-through fixed.
+
+**Pending user test:** universal back button, combat bleed-through suppression, chest **relic** selection (only Skip worked before), ancient offset numbers.
+
+**Current state:** Green — compiles clean (0 warn / 0 err), installed v0.10.37.
+
+**File size flag:** `HandTargetingOverlay.cs` = **755 lines** (over the 700 extract threshold, near the 800 cap) — extract the `Sync*Mode` / suppression helpers into a mode-coordinator before adding more. `OverlayModeService.cs` = 319.
+
+**Next session:** Shop screen (`NMerchantRoom` / `NMerchantCard` / `NMerchantRelic` / `NMerchantPotion` + back/proceed). Refactor `HandTargetingOverlay` (>700). Capture a clean combat perf summary with logging ON.
+
+---
+
 ## 2026-06-17 (evening) — Map, card-select, events, proceed/confirm hover + perf (v0.10.18 → v0.10.30)
 
 **Files changed:**

@@ -1,0 +1,211 @@
+using Godot;
+
+namespace DwellTargeting;
+
+/// <summary>
+/// Large ▲/▼ hover zones on the left edge for wheel-style scrolling without dragging.
+/// Map uses two vertical pairs; pile/card selection screens use one centered pair.
+/// </summary>
+internal static class LeftHoverScrollOverlay
+{
+    private const int CanvasLayerOrder = 129;
+    private const int ArrowSize = 70;
+    private const int ArrowGap = 18;
+    private const float LeftMargin = 40f;
+    private const int ScrollIntervalFrames = 3;
+
+    private static readonly float[] MapCenterFractions = [0.33f, 0.67f];
+    private static readonly float[] PileCenterFractions = [0.5f];
+
+    private static CanvasLayer? _layer;
+    private static Control? _root;
+    private static readonly List<(Button Up, Button Down)> _strips = [];
+    private static int _scrollFrameCounter;
+    private static long _nextScrollLogTick;
+    private static string _activeTag = string.Empty;
+
+    internal static void SyncMap()
+    {
+        _activeTag = "Map";
+        SyncStrips(MapCenterFractions);
+    }
+
+    internal static void SyncPileSelect()
+    {
+        _activeTag = "Pile";
+        SyncStrips(PileCenterFractions);
+    }
+
+    internal static void UpdateFrame()
+    {
+        if (_root == null || !_root.Visible || _strips.Count == 0)
+            return;
+
+        HandleHoverScroll();
+    }
+
+    internal static void Hide()
+    {
+        _activeTag = string.Empty;
+        _scrollFrameCounter = 0;
+
+        if (_root != null && NodeQuery.IsLive(_root))
+            _root.Visible = false;
+    }
+
+    private static void SyncStrips(float[] centerFractions)
+    {
+        EnsureCanvas();
+        if (_root == null)
+            return;
+
+        EnsureStripCount(centerFractions.Length);
+        PositionStrips(centerFractions);
+        _root.Visible = true;
+        HandleHoverScroll();
+    }
+
+    private static void HandleHoverScroll()
+    {
+        var mouse = DwellHoverService.GetMousePosition();
+        if (mouse == null)
+        {
+            _scrollFrameCounter = 0;
+            return;
+        }
+
+        bool overUp = false;
+        bool overDown = false;
+        foreach (var (up, down) in _strips)
+        {
+            if (up.Visible && up.GetGlobalRect().HasPoint(mouse.Value))
+                overUp = true;
+            if (down.Visible && down.GetGlobalRect().HasPoint(mouse.Value))
+                overDown = true;
+        }
+
+        if (overUp && overDown)
+        {
+            _scrollFrameCounter = 0;
+            return;
+        }
+
+        if (!overUp && !overDown)
+        {
+            _scrollFrameCounter = 0;
+            return;
+        }
+
+        _scrollFrameCounter++;
+        if (_scrollFrameCounter % ScrollIntervalFrames != 0)
+            return;
+
+        MapScrollService.Scroll(overUp);
+
+        long now = System.Environment.TickCount64;
+        if (now >= _nextScrollLogTick)
+        {
+            _nextScrollLogTick = now + 1000;
+            ModLogger.Info($"[{_activeTag}Scroll] scrolling {(overUp ? "up" : "down")}.");
+        }
+    }
+
+    private static void PositionStrips(float[] centerFractions)
+    {
+        if (_root == null)
+            return;
+
+        var size = _root.GetViewportRect().Size;
+        float x = LeftMargin;
+
+        for (int i = 0; i < _strips.Count; i++)
+        {
+            float centerY = size.Y * centerFractions[i];
+            var (up, down) = _strips[i];
+
+            up.Size = new Vector2(ArrowSize, ArrowSize);
+            down.Size = new Vector2(ArrowSize, ArrowSize);
+            up.GlobalPosition = new Vector2(x, centerY - ArrowSize - (ArrowGap / 2f));
+            down.GlobalPosition = new Vector2(x, centerY + (ArrowGap / 2f));
+            up.Visible = true;
+            down.Visible = true;
+        }
+
+        for (int i = centerFractions.Length; i < _strips.Count; i++)
+        {
+            _strips[i].Up.Visible = false;
+            _strips[i].Down.Visible = false;
+        }
+    }
+
+    private static void EnsureStripCount(int count)
+    {
+        EnsureCanvas();
+        if (_root == null)
+            return;
+
+        while (_strips.Count < count)
+        {
+            int index = _strips.Count + 1;
+            var up = CreateArrow($"ScrollUp{index}", "▲");
+            var down = CreateArrow($"ScrollDown{index}", "▼");
+            _root.AddChild(up);
+            _root.AddChild(down);
+            _strips.Add((up, down));
+        }
+    }
+
+    private static void EnsureCanvas()
+    {
+        if (_layer != null && NodeQuery.IsLive(_layer) && _root != null && NodeQuery.IsLive(_root))
+            return;
+
+        var tree = Engine.GetMainLoop() as SceneTree;
+        if (tree?.Root == null)
+            return;
+
+        _layer = new CanvasLayer { Layer = CanvasLayerOrder, Name = "DwellLeftScrollLayer" };
+        tree.Root.AddChild(_layer);
+
+        _root = new Control
+        {
+            Name = "DwellLeftScrollRoot",
+            MouseFilter = Control.MouseFilterEnum.Ignore
+        };
+        _root.SetAnchorsPreset(Control.LayoutPreset.FullRect);
+        _layer.AddChild(_root);
+    }
+
+    private static Button CreateArrow(string name, string glyph)
+    {
+        var button = new Button
+        {
+            Name = name,
+            Text = glyph,
+            CustomMinimumSize = new Vector2(ArrowSize, ArrowSize),
+            FocusMode = Control.FocusModeEnum.None,
+            MouseFilter = Control.MouseFilterEnum.Stop,
+            ZIndex = 2
+        };
+
+        var style = new StyleBoxFlat
+        {
+            BgColor = new Color(0.08f, 0.1f, 0.14f, 0.9f),
+            BorderColor = new Color(0.45f, 0.85f, 1f, 1f),
+            BorderWidthBottom = 2,
+            BorderWidthTop = 2,
+            BorderWidthLeft = 2,
+            BorderWidthRight = 2,
+            CornerRadiusBottomLeft = 10,
+            CornerRadiusBottomRight = 10,
+            CornerRadiusTopLeft = 10,
+            CornerRadiusTopRight = 10
+        };
+        button.AddThemeStyleboxOverride("normal", style);
+        button.AddThemeStyleboxOverride("hover", style);
+        button.AddThemeStyleboxOverride("pressed", style);
+        button.AddThemeStyleboxOverride("focus", style);
+        button.AddThemeFontSizeOverride("font_size", ArrowSize / 2);
+        return button;
+    }
+}

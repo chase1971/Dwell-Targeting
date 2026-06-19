@@ -63,6 +63,17 @@ internal partial class DwellInputRouter : Node
             return;
         }
 
+        if (mode == OverlayMode.Shop)
+        {
+            if (allowPlay && ShopOverlay.TryRouteClick(mouseButton.GlobalPosition, out string shopMessage))
+            {
+                ModLogger.Info(shopMessage);
+                viewport.SetInputAsHandled();
+            }
+
+            return;
+        }
+
         if (mouseButton.ButtonIndex != MouseButton.Left)
             return;
 

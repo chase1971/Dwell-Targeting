@@ -2,6 +2,7 @@ using Godot;
 using MegaCrit.Sts2.Core.Combat;
 using MegaCrit.Sts2.Core.Nodes.Combat;
 using MegaCrit.Sts2.Core.Nodes.Rewards;
+using MegaCrit.Sts2.Core.Nodes.Events.Custom;
 using MegaCrit.Sts2.Core.Nodes.Rooms;
 using MegaCrit.Sts2.Core.Nodes.Screens;
 using MegaCrit.Sts2.Core.Nodes.Screens.CardSelection;
@@ -18,7 +19,9 @@ internal enum OverlayMode
     PileSelect,
     Rewards,
     Map,
-    Event
+    Event,
+    Shop,
+    Room
 }
 
 internal static class OverlayModeService
@@ -33,6 +36,8 @@ internal static class OverlayModeService
     private static Node? _cachedPileSelectScreen;
     private static NMapScreen? _cachedMapScreen;
     private static NEventRoom? _cachedEventRoom;
+    private static Node? _cachedShopNode;
+    private static Node? _cachedRoomNode;
 
     internal static OverlayMode GetMode()
     {
@@ -89,6 +94,24 @@ internal static class OverlayModeService
         return null;
     }
 
+    internal static Node? GetCachedShopNode()
+    {
+        GetMode();
+        if (_cachedShopNode != null && NodeQuery.IsLive(_cachedShopNode))
+            return _cachedShopNode;
+
+        return null;
+    }
+
+    internal static Node? GetCachedRoomNode()
+    {
+        GetMode();
+        if (_cachedRoomNode != null && NodeQuery.IsLive(_cachedRoomNode))
+            return _cachedRoomNode;
+
+        return null;
+    }
+
     internal static NRewardsScreen? GetCachedRewardsScreen()
     {
         GetMode();
@@ -102,7 +125,7 @@ internal static class OverlayModeService
     }
 
     internal static string DebugSnapshot() =>
-        $"mode={_cachedMode} rewards={_cachedRewardsScreen != null} pile={_cachedPileSelectScreen != null} map={_cachedMapScreen != null} event={_cachedEventRoom != null}";
+        $"mode={_cachedMode} rewards={_cachedRewardsScreen != null} pile={_cachedPileSelectScreen != null} map={_cachedMapScreen != null} event={_cachedEventRoom != null} shop={_cachedShopNode != null} room={_cachedRoomNode != null}";
 
     internal static void InvalidateCache()
     {
@@ -112,6 +135,8 @@ internal static class OverlayModeService
         _cachedPileSelectScreen = null;
         _cachedMapScreen = null;
         _cachedEventRoom = null;
+        _cachedShopNode = null;
+        _cachedRoomNode = null;
     }
 
     private static int ComputeInvalidationKey()
@@ -145,6 +170,8 @@ internal static class OverlayModeService
         _cachedPileSelectScreen = null;
         _cachedMapScreen = null;
         _cachedEventRoom = null;
+        _cachedShopNode = null;
+        _cachedRoomNode = null;
         _cachedMode = OverlayMode.None;
 
         if (!RunManager.Instance.IsInProgress)
@@ -162,15 +189,27 @@ internal static class OverlayModeService
             return;
         }
 
+        // An open, travel-enabled map is proof the rewards step is finished — the game only enables
+        // travel once nothing is blocking it. So a travelable map outranks a lingering/ghost rewards
+        // screen, otherwise a claimed rewards screen that still reports "has choices" keeps Rewards
+        // mode active and its number buttons bleed through on top of the map.
+        if (_cachedMapScreen != null)
+        {
+            _cachedMode = OverlayMode.Map;
+            return;
+        }
+
         if (_cachedRewardsScreen != null)
         {
             _cachedMode = OverlayMode.Rewards;
             return;
         }
 
-        if (_cachedMapScreen != null)
+        // Merchant rooms (regular shop + fake/Timu merchant) outrank generic event rooms — the fake
+        // merchant inherits event-room structure but uses shop inventory nodes, not NEventOptionButton.
+        if (_cachedShopNode != null && !CombatManager.Instance.IsInProgress)
         {
-            _cachedMode = OverlayMode.Map;
+            _cachedMode = OverlayMode.Shop;
             return;
         }
 
@@ -179,6 +218,15 @@ internal static class OverlayModeService
         if (_cachedEventRoom != null && !CombatManager.Instance.IsInProgress)
         {
             _cachedMode = OverlayMode.Event;
+            return;
+        }
+
+        // Rest sites and treasure (chest) rooms are the lowest-priority interactive screens: a card
+        // grid (PileSelect, e.g. the rest-site upgrade picker) or a relic rewards screen (Rewards, e.g.
+        // an opened chest) outranks them, so Room only wins once those sub-screens are gone.
+        if (_cachedRoomNode != null && !CombatManager.Instance.IsInProgress)
+        {
+            _cachedMode = OverlayMode.Room;
             return;
         }
 
@@ -223,9 +271,15 @@ internal static class OverlayModeService
         }
         else if (_cachedPileSelectScreen == null && node is CanvasItem canvas && NodeQuery.IsVisible(canvas) && IsPileSelectScreen(node))
             _cachedPileSelectScreen = node;
+        else if (_cachedShopNode == null && TryCaptureShopNode(node))
+            _cachedShopNode = node;
         else if (_cachedEventRoom == null && node is NEventRoom eventRoom
-            && NodeQuery.IsLive(eventRoom) && NodeQuery.IsVisible(eventRoom))
+            && NodeQuery.IsLive(eventRoom) && NodeQuery.IsVisible(eventRoom)
+            && node is not NFakeMerchant)
             _cachedEventRoom = eventRoom;
+        else if (_cachedRoomNode == null && node is (NRestSiteRoom or NTreasureRoom)
+            && node is CanvasItem roomCanvas && NodeQuery.IsVisible(roomCanvas))
+            _cachedRoomNode = node;
 
         if (_cachedRewardsScreen != null && _cachedPileSelectScreen != null)
             return;
@@ -251,4 +305,15 @@ internal static class OverlayModeService
             or NCardGridSelectionScreen
             or NSimpleCardSelectScreen
             or NCardRewardSelectionScreen;
+
+    private static bool TryCaptureShopNode(Node node)
+    {
+        if (!NodeQuery.IsLive(node) || node is not CanvasItem canvas || !NodeQuery.IsVisible(canvas))
+            return false;
+
+        if (node is NMerchantRoom or NFakeMerchant)
+            return true;
+
+        return false;
+    }
 }

@@ -3,8 +3,8 @@ using Godot;
 namespace DwellTargeting;
 
 /// <summary>
-/// Scrolls the map view by feeding the game a synthetic mouse-wheel event (the map already handles
-/// wheel scrolling natively, so this drives its own logic — including clamping at the edges).
+/// Scrolls a screen by feeding the game a synthetic mouse-wheel event (map and card grids handle
+/// wheel scrolling natively, so this drives their own logic — including clamping at the edges).
 /// </summary>
 internal static class MapScrollService
 {

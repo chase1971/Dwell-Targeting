@@ -39,7 +39,10 @@ internal static class NodeQuery
         if (!IsLive(start))
             return found;
 
-        FindAllRecursive(start, found);
+        int visited = 0;
+        FindAllRecursive(start, found, ref visited);
+        OverlayPerfDiagnostics.Count("tree.findAllCalls");
+        OverlayPerfDiagnostics.Count("tree.nodesVisited", visited);
         return found;
     }
 
@@ -94,10 +97,12 @@ internal static class NodeQuery
         }
     }
 
-    private static void FindAllRecursive<T>(Node node, List<T> found) where T : Node
+    private static void FindAllRecursive<T>(Node node, List<T> found, ref int visited) where T : Node
     {
         if (!IsLive(node))
             return;
+
+        visited++;
 
         if (node is T match)
             found.Add(match);
@@ -105,7 +110,7 @@ internal static class NodeQuery
         try
         {
             foreach (var child in node.GetChildren())
-                FindAllRecursive(child, found);
+                FindAllRecursive(child, found, ref visited);
         }
         catch
         {
