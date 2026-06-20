@@ -126,6 +126,9 @@ internal static class SettingsStore
     internal static void ApplyEnablePerfLogging(bool value, bool persist = true, bool syncModConfig = true) =>
         ApplyBool(v => _current.EnablePerfLogging = v, _current.EnablePerfLogging, value, "enablePerfLogging", persist, syncModConfig);
 
+    internal static void ApplyShowHitboxOverlay(bool value, bool persist = true, bool syncModConfig = true) =>
+        ApplyBool(v => _current.ShowHitboxOverlay = v, _current.ShowHitboxOverlay, value, "showHitboxOverlay", persist, syncModConfig);
+
     internal static void RestoreDefaults()
     {
         _current = new DwellSettings();

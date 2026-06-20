@@ -56,7 +56,6 @@ internal static class PileSelectOverlay
             }
         }
 
-        LeftHoverScrollOverlay.SyncPileSelect();
     }
 
     internal static void CollectDwellTargets(List<DwellHoverService.Target> targets)
@@ -116,7 +115,6 @@ internal static class PileSelectOverlay
         _cachedConfirmButtons = null;
         _framesSinceCardScan = 0;
         _loggedButtonTypes = false;
-        LeftHoverScrollOverlay.Hide();
     }
 
     internal static bool TryRouteClick(Vector2 globalPos, out string message)

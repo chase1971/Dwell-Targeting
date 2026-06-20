@@ -19,6 +19,10 @@ internal static class ModConfigEntries
                 "Write frame timing to dwell-targeting.log every 3s (for diagnosing frame drops). Leave off normally.",
                 v => SettingsStore.ApplyEnablePerfLogging(Convert.ToBoolean(v), persist: true, syncModConfig: false),
                 entryType, configTypeEnum),
+            Toggle("showHitboxOverlay", "Show Hitbox Outlines", SettingsStore.Current.ShowHitboxOverlay,
+                "Draw green outlines on every active dwell target so you can see where the clickable areas are. Debugging aid.",
+                v => SettingsStore.ApplyShowHitboxOverlay(Convert.ToBoolean(v), persist: true, syncModConfig: false),
+                entryType, configTypeEnum),
 
             Separator(entryType, configTypeEnum),
             Header("Hover Time (seconds)", entryType, configTypeEnum),

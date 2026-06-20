@@ -1,5 +1,19 @@
 # Dwell Targeting — Session Log
 
+## 2026-06-20 — Shop purchases + hitbox alignment (v0.10.45 → v0.10.56)
+
+**Files changed:** ShopOverlay.cs (~437 lines), ShopSelectionService.cs (new), ShopInventoryQuery.cs (new), ShopAlignmentDiagnostics.cs (new), DwellDebugOverlay.cs (new), HandTargetingOverlay.cs (+19), DeckViewOverlay.cs (new), MapOverlay.cs, EventOverlay.cs, DwellSettings/SettingsStore/ModConfigEntries (showHitboxOverlay toggle), mod_manifest/ModEntry v0.10.56
+
+**What worked:** Shop fully buyable via dwell — cards (hitbox on slot clickable child), relics/potions (offset numbers), card removal, merchant rug. Purchase path: `OnTryPurchase(inventory)` on the specific slot (position-independent). Deck view scroll strip no longer hidden by map/shop sync. Hitbox debug overlay (green boxes + red mouse marker) diagnosed misalignment; fix confirmed by user — all shop cards buyable. Debug overlay off by default in v0.10.56.
+
+**Current state:** Green — shop confirmed working; v0.10.56 installed to STS2 mods folder.
+
+**File size flag:** HandTargetingOverlay.cs = **770 lines** (near 800 cap — extract mode coordinator before next feature batch). ShopOverlay.cs = **~530 lines** (over 500 — monitor). MapOverlay.cs grew significantly.
+
+**Next session:** Implement planned batch (see plan): native End Turn button dwell, all event options → offset numbers, back/eye button hitbox fix, game over Continue, main menu buttons. Optional: shorten shop menu cooldown ("two hovers" feel). Refactor HandTargetingOverlay before adding modes.
+
+---
+
 ## Backlog — known bugs & remaining screens (living list)
 
 ### Bugs — fix before new screens

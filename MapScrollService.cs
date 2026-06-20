@@ -14,6 +14,7 @@ internal static class MapScrollService
         if (viewport == null)
             return;
 
+        // Wheel must land over the scrollable content (map/card grid), not the edge hover arrows.
         var center = viewport.GetVisibleRect().Size / 2f;
         var wheel = new InputEventMouseButton
         {

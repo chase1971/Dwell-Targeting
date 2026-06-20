@@ -55,6 +55,8 @@ internal static class HandTargetingOverlay
 
         BackButtonOverlay.CollectDwellTargets(targets);
 
+        DeckViewOverlay.CollectDwellTargets(targets);
+
         var confirm = ConfirmOverlay.GetDwellTarget();
         if (confirm != null)
             targets.Add(confirm.Value);
@@ -200,8 +202,7 @@ internal static class HandTargetingOverlay
             var mode = OverlayModeService.GetMode();
             OverlayPerfDiagnostics.AddCategory("getMode", getModeStart);
 
-            bool showUtility = RunManager.Instance.IsInProgress
-                && mode is not OverlayMode.Rewards and not OverlayMode.PileSelect and not OverlayMode.Map and not OverlayMode.Event and not OverlayMode.Shop;
+            bool showUtility = RunManager.Instance.IsInProgress;
             UtilityBarOverlay.Sync(showUtility);
             BackButtonOverlay.Sync();
 
@@ -347,11 +348,16 @@ internal static class HandTargetingOverlay
         long dwellStart = OverlayPerfDiagnostics.BeginTick();
         try
         {
+            // Run after mode-specific sync so map/shop handlers cannot hide deck scroll mid-frame.
+            DeckViewOverlay.Sync();
+
             var dwellTargets = new List<DwellHoverService.Target>();
 
             long collectStart = OverlayPerfDiagnostics.BeginTick();
             CollectDwellTargets(dwellTargets);
             OverlayPerfDiagnostics.Add("dwell.collect", collectStart);
+
+            DwellDebugOverlay.Render(dwellTargets);
 
             long processStart = OverlayPerfDiagnostics.BeginTick();
             DwellHoverService.ProcessFrame(dwellTargets, GetProcessDelta());
@@ -378,6 +384,7 @@ internal static class HandTargetingOverlay
         RewardsOverlay.Hide();
         MapOverlay.Hide();
         LeftHoverScrollOverlay.Hide();
+        HoverScrollStripOverlay.Hide();
         EventOverlay.Hide();
         ShopOverlay.Hide();
         RoomOverlay.Hide();
@@ -448,6 +455,8 @@ internal static class HandTargetingOverlay
         PileSelectOverlay.Hide();
         MapOverlay.Hide();
         LeftHoverScrollOverlay.Hide();
+        if (!CombatViewSuppressionQuery.IsDeckViewOpen())
+            HoverScrollStripOverlay.Hide();
         EventOverlay.Hide();
         RoomOverlay.Hide();
         ShopOverlay.Sync();
@@ -467,6 +476,7 @@ internal static class HandTargetingOverlay
         PileSelectOverlay.Hide();
         MapOverlay.Hide();
         LeftHoverScrollOverlay.Hide();
+        HoverScrollStripOverlay.Hide();
         EventOverlay.Hide();
         ShopOverlay.Hide();
         RoomOverlay.Sync();
@@ -479,6 +489,7 @@ internal static class HandTargetingOverlay
         // frame is what kept the native Proceed/Skip dwell from ever firing.
         MapOverlay.Hide();
         LeftHoverScrollOverlay.Hide();
+        HoverScrollStripOverlay.Hide();
         EventOverlay.Hide();
         ShopOverlay.Hide();
         HandInputBlocker.Release();
@@ -720,6 +731,8 @@ internal static class HandTargetingOverlay
         EnemyLabelOverlay.Hide();
         MapOverlay.Hide();
         LeftHoverScrollOverlay.Hide();
+        HoverScrollStripOverlay.Hide();
+        DeckViewOverlay.Hide();
         EventOverlay.Hide();
         ShopOverlay.Hide();
         RoomOverlay.Hide();
@@ -742,6 +755,8 @@ internal static class HandTargetingOverlay
         PileSelectOverlay.Hide();
         MapOverlay.Hide();
         LeftHoverScrollOverlay.Hide();
+        HoverScrollStripOverlay.Hide();
+        DeckViewOverlay.Hide();
         EventOverlay.Hide();
         ShopOverlay.Hide();
         RoomOverlay.Hide();

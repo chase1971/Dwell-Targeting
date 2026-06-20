@@ -13,7 +13,7 @@ public static class ModEntry
         HandTargetingOverlay.EnsureInitialized();
         ModConfigBridge.DeferredRegister();
         ModManagerSettingsBridge.ScheduleRegistration();
-        ModLogger.Info("v0.10.40 loaded — left-side hover scroll on map (two zones) and card selection menus.");
+        ModLogger.Info("v0.10.56 loaded — hitbox overlay off by default; shop alignment confirmed working.");
         ModLogger.Info($"Settings file: {SettingsStore.SettingsFilePath}");
         ModLogger.Info($"Log file: {System.IO.Path.Combine(System.Environment.GetFolderPath(System.Environment.SpecialFolder.ApplicationData), "SlayTheSpire2", "logs", "dwell-targeting.log")}");
     }

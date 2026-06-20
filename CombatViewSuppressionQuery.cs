@@ -18,6 +18,21 @@ internal static class CombatViewSuppressionQuery
     private static long _lastCheck;
     private static bool _open;
 
+    internal static bool IsDeckViewOpen()
+    {
+        var root = (Engine.GetMainLoop() as SceneTree)?.Root;
+        if (root == null)
+            return false;
+
+        foreach (var screen in NodeQuery.FindAll<NDeckViewScreen>(root))
+        {
+            if (NodeQuery.IsVisible(screen))
+                return true;
+        }
+
+        return false;
+    }
+
     internal static bool IsViewingScreenOpen()
     {
         long now = System.Environment.TickCount64;

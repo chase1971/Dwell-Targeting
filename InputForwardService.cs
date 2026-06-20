@@ -75,6 +75,9 @@ internal static class InputForwardService
         ClickControlDeferred(control, button);
     }
 
+    internal static void ClickControlAt(Control control, MouseButton button) =>
+        ClickControlDeferred(control, button);
+
     internal static bool TryActivateControl(Control control)
     {
         if (!NodeQuery.IsLive(control))

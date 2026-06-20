@@ -70,4 +70,7 @@ internal sealed class DwellSettings
 
     [JsonPropertyName("enablePerfLogging")]
     public bool EnablePerfLogging { get; set; }
+
+    [JsonPropertyName("showHitboxOverlay")]
+    public bool ShowHitboxOverlay { get; set; }
 }

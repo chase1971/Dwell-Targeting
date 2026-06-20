@@ -1,4 +1,5 @@
 using Godot;
+using MegaCrit.Sts2.Core.Nodes.CommonUi;
 using MegaCrit.Sts2.Core.Nodes.Events;
 using MegaCrit.Sts2.Core.Nodes.GodotExtensions;
 using MegaCrit.Sts2.Core.Nodes.Rooms;
@@ -6,14 +7,9 @@ using MegaCrit.Sts2.Core.Nodes.Rooms;
 namespace DwellTargeting;
 
 /// <summary>
-/// Hover-to-select for event option buttons (e.g. "Share Knowledge" / "Rip the Leech Off"). Options
-/// are <see cref="NEventOptionButton"/> (NButton/NClickableControl) so we dwell over each and
-/// ForceClick it.
-///
-/// Ancient encounters are a special case: each option is a relic whose effect is only revealed by a
-/// tooltip when you hover the option. Direct hover-to-select would pick before you can read it, so
-/// for ancient events we instead place a small offset number button beside each option. Hovering the
-/// option body shows its tooltip (no dwell target there); dwelling the number actually picks it.
+/// Hover-to-select for event option buttons. Ancient relic rows get offset number buttons (hover the
+/// row to read the tooltip, dwell the number to pick). Proceed/Skip always uses a direct padded dwell
+/// on the native control — never an offset number.
 /// </summary>
 internal static class EventOverlay
 {
@@ -22,10 +18,12 @@ internal static class EventOverlay
     private const int NumberSize = 54;
     private const float NumberGap = 14f;
     private const float ScreenMargin = 10f;
+    private const float ProceedHitboxPadding = 24f;
 
     private static NEventRoom? _room;
     private static List<Control>? _cachedButtons;
-    private static bool _isAncient;
+    private static List<Control>? _cachedAncientButtons;
+    private static Control? _proceedControl;
     private static int _framesSinceScan;
     private static long _nextDiagTick;
 
@@ -47,10 +45,11 @@ internal static class EventOverlay
         {
             _framesSinceScan = 0;
             _cachedButtons = FindOptionButtons(_room);
-            _isAncient = _cachedButtons.Any(IsAncientOption);
+            _cachedAncientButtons = _cachedButtons.Where(IsAncientOption).ToList();
+            _proceedControl = FindProceedControl();
         }
 
-        if (_isAncient)
+        if (_cachedAncientButtons is { Count: > 0 })
             SyncNumberButtons();
         else
             HideNumberButtons();
@@ -59,7 +58,9 @@ internal static class EventOverlay
         if (now >= _nextDiagTick)
         {
             _nextDiagTick = now + 2000;
-            ModLogger.Info($"[Event] sync options={_cachedButtons?.Count ?? -1} ancient={_isAncient}.");
+            ModLogger.Info(
+                $"[Event] sync options={_cachedButtons?.Count ?? -1} ancient={_cachedAncientButtons?.Count ?? -1} " +
+                $"proceed={(_proceedControl != null)}.");
         }
     }
 
@@ -68,14 +69,12 @@ internal static class EventOverlay
         if (_cachedButtons == null)
             return;
 
-        // Ancient events: the dwell target is the offset number, NOT the option body, so the user can
-        // hover the option to read its relic tooltip without triggering a pick.
-        if (_isAncient)
+        if (_cachedAncientButtons is { Count: > 0 })
         {
-            for (int i = 0; i < _numberButtons.Count && i < _cachedButtons.Count; i++)
+            for (int i = 0; i < _numberButtons.Count && i < _cachedAncientButtons.Count; i++)
             {
                 var button = _numberButtons[i];
-                var option = _cachedButtons[i];
+                var option = _cachedAncientButtons[i];
                 if (button == null || !NodeQuery.IsLive(button) || !button.Visible)
                     continue;
                 if (!NodeQuery.IsLive(option) || !NodeQuery.IsVisible(option))
@@ -87,18 +86,12 @@ internal static class EventOverlay
                     () => EventSelectionService.TrySelect(captured),
                     $"AncientOption:{i + 1}"));
             }
-
-            return;
         }
 
-        int slot = 1;
-        foreach (var button in _cachedButtons)
+        foreach (var button in _cachedButtons.Where(b => !IsAncientOption(b)))
         {
             if (!NodeQuery.IsLive(button) || !NodeQuery.IsVisible(button))
-            {
-                slot++;
                 continue;
-            }
 
             if (ControlHitboxService.TryGetDwellRect(button, out var rect))
             {
@@ -106,28 +99,152 @@ internal static class EventOverlay
                 targets.Add(DwellHoverService.Menu(
                     rect,
                     () => EventSelectionService.TrySelect(captured),
-                    $"EventOption:{slot}"));
+                    $"EventOption:{button.Name}"));
             }
-
-            slot++;
         }
+
+        if (TryGetProceedRect(out var proceedRect))
+            targets.Add(DwellHoverService.Menu(proceedRect, ActivateProceed, "EventProceed"));
     }
 
     internal static void Hide()
     {
         _room = null;
         _cachedButtons = null;
-        _isAncient = false;
+        _cachedAncientButtons = null;
+        _proceedControl = null;
         _framesSinceScan = 0;
         HideNumberButtons();
     }
 
     private static bool IsAncientOption(Control option) =>
-        NodeQuery.IsLive(option) && option.Name.ToString().Contains("Ancient", StringComparison.OrdinalIgnoreCase);
+        NodeQuery.IsLive(option)
+        && !IsProceedLike(option)
+        && option.Name.ToString().Contains("Ancient", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsProceedLike(Control control)
+    {
+        if (!NodeQuery.IsLive(control))
+            return false;
+
+        if (control is NProceedButton)
+            return true;
+
+        if (ContainsProceedText(control.Name.ToString()))
+            return true;
+
+        if (control is Button { Text: var text } && ContainsProceedText(text))
+            return true;
+
+        return ContainsProceedTextInTree(control);
+    }
+
+    private static bool ContainsProceedTextInTree(Node node)
+    {
+        if (!NodeQuery.IsLive(node))
+            return false;
+
+        if (node is Label { Text: var labelText } && ContainsProceedText(labelText))
+            return true;
+
+        if (node is Button { Text: var buttonText } && ContainsProceedText(buttonText))
+            return true;
+
+        try
+        {
+            foreach (var child in node.GetChildren())
+            {
+                if (ContainsProceedTextInTree(child))
+                    return true;
+            }
+        }
+        catch
+        {
+            /* disposed mid-walk */
+        }
+
+        return false;
+    }
+
+    private static bool ContainsProceedText(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return false;
+
+        return text.Contains("Proceed", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("Skip", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("Continue", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static Control? FindProceedControl()
+    {
+        var root = (Engine.GetMainLoop() as SceneTree)?.Root;
+        if (root == null)
+            return null;
+
+        foreach (var button in NodeQuery.FindAll<NProceedButton>(root))
+        {
+            if (button is not Control control || !NodeQuery.IsVisible(control))
+                continue;
+            if (button is NClickableControl { IsEnabled: false })
+                continue;
+
+            return control;
+        }
+
+        foreach (var button in NodeQuery.FindAll<NEventOptionButton>(root))
+        {
+            if (button is not Control control || !NodeQuery.IsVisible(control))
+                continue;
+            if (button is NClickableControl { IsEnabled: false })
+                continue;
+            if (!IsProceedLike(control))
+                continue;
+
+            return control;
+        }
+
+        return null;
+    }
+
+    private static bool TryGetProceedRect(out Rect2 rect)
+    {
+        rect = default;
+        if (_proceedControl == null || !NodeQuery.IsLive(_proceedControl) || !NodeQuery.IsVisible(_proceedControl))
+            return false;
+
+        if (_proceedControl is NClickableControl { IsEnabled: false })
+            return false;
+
+        rect = _proceedControl.GetGlobalRect();
+        if (rect.Size.X < 8f || rect.Size.Y < 8f)
+            return false;
+
+        rect = rect.Grow(ProceedHitboxPadding);
+        return true;
+    }
+
+    private static void ActivateProceed()
+    {
+        if (_proceedControl == null || !NodeQuery.IsLive(_proceedControl))
+        {
+            ModLogger.Warn("[Event] Proceed dwell fired but proceed control missing/dead.");
+            return;
+        }
+
+        if (_proceedControl is NProceedButton proceed)
+        {
+            RewardSelectionService.TryProceed(proceed);
+            return;
+        }
+
+        InputForwardService.PressAcceptKey();
+        ModLogger.Info($"[Event] Proceed '{_proceedControl.Name}' via E accept key.");
+    }
 
     private static void SyncNumberButtons()
     {
-        if (_cachedButtons == null)
+        if (_cachedAncientButtons == null)
             return;
 
         EnsureCanvas();
@@ -136,7 +253,7 @@ internal static class EventOverlay
 
         _root.Visible = true;
 
-        while (_numberButtons.Count < _cachedButtons.Count)
+        while (_numberButtons.Count < _cachedAncientButtons.Count)
         {
             var button = OverlayButtonFactory.CreateMenuButton(
                 $"AncientPick{_numberButtons.Count + 1}",
@@ -156,10 +273,10 @@ internal static class EventOverlay
             if (button == null || !NodeQuery.IsLive(button))
                 continue;
 
-            if (i >= _cachedButtons.Count
-                || !NodeQuery.IsLive(_cachedButtons[i])
-                || !NodeQuery.IsVisible(_cachedButtons[i])
-                || !ControlHitboxService.TryGetDwellRect(_cachedButtons[i], out var optionRect))
+            if (i >= _cachedAncientButtons.Count
+                || !NodeQuery.IsLive(_cachedAncientButtons[i])
+                || !NodeQuery.IsVisible(_cachedAncientButtons[i])
+                || !ControlHitboxService.TryGetDwellRect(_cachedAncientButtons[i], out var optionRect))
             {
                 button.Visible = false;
                 continue;
@@ -224,11 +341,12 @@ internal static class EventOverlay
                 continue;
             if (button is NClickableControl { IsEnabled: false })
                 continue;
+            if (IsProceedLike(control))
+                continue;
 
             list.Add(control);
         }
 
-        // Top-to-bottom so the offset numbers (1/2/3) match the on-screen option order.
         list.Sort((a, b) =>
         {
             int cmp = a.GlobalPosition.Y.CompareTo(b.GlobalPosition.Y);

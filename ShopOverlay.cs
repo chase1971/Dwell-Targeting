@@ -1,4 +1,5 @@
 using Godot;
+using MegaCrit.Sts2.Core.Nodes.Cards;
 using MegaCrit.Sts2.Core.Nodes.CommonUi;
 using MegaCrit.Sts2.Core.Nodes.GodotExtensions;
 using MegaCrit.Sts2.Core.Nodes.Rooms;
@@ -7,20 +8,32 @@ using MegaCrit.Sts2.Core.Nodes.Screens.Shops;
 namespace DwellTargeting;
 
 /// <summary>
-/// Hover-to-buy for regular merchants (<see cref="NMerchantRoom"/>) and the fake/Timu merchant
-/// (<see cref="Events.Custom.NFakeMerchant"/>). Covers wares, the merchant character, and Proceed.
+/// Shop dwell targets: cards and card-removal use direct hover-to-buy; relics and potions use offset
+/// number buttons so the user can hover the item for its tooltip before dwelling the number to buy.
 /// </summary>
 internal static class ShopOverlay
 {
-    private const float ProceedHitboxPadding = 24f;
     private const int RescanIntervalFrames = 10;
+    private const int CanvasLayerOrder = 132;
+    private const int NumberSize = 54;
+    private const float NumberGap = 14f;
+    private const float ScreenMargin = 10f;
+    private const float ProceedHitboxPadding = 24f;
+    private const float RemovalHitboxPadding = 20f;
 
     private static Node? _shopRoot;
-    private static List<Control>? _wareControls;
+    private static List<Control>? _cardControls;
+    private static List<Control>? _numberedControls;
+    private static List<Control>? _removalControls;
+    private static List<Control>? _merchantButtonControls;
     private static List<Control>? _characterControls;
     private static NProceedButton? _proceedButton;
     private static int _framesSinceScan;
     private static long _nextDiagTick;
+
+    private static CanvasLayer? _layer;
+    private static Control? _root;
+    private static readonly List<Button> _numberButtons = new();
 
     internal static void Sync()
     {
@@ -32,18 +45,30 @@ internal static class ShopOverlay
         }
 
         _framesSinceScan++;
-        if (_wareControls == null || _characterControls == null || _framesSinceScan >= RescanIntervalFrames)
+        if (_cardControls == null || _numberedControls == null || _merchantButtonControls == null
+            || _characterControls == null
+            || _framesSinceScan >= RescanIntervalFrames)
         {
             _framesSinceScan = 0;
             Rescan(_shopRoot);
         }
+
+        if (_numberedControls is { Count: > 0 })
+            SyncNumberButtons();
+        else
+            HideNumberButtons();
+
+        if (_cardControls is { Count: > 0 })
+            ShopAlignmentDiagnostics.Log(_cardControls[0]);
 
         long now = System.Environment.TickCount64;
         if (now >= _nextDiagTick)
         {
             _nextDiagTick = now + 2000;
             ModLogger.Info(
-                $"[Shop] {_shopRoot.GetType().Name} wares={_wareControls?.Count ?? -1} " +
+                $"[Shop] {_shopRoot.GetType().Name} inventoryOpen={ShopInventoryQuery.IsInventoryOpen(ResolveSearchRoot(_shopRoot))} " +
+                $"merchantBtn={_merchantButtonControls?.Count ?? -1} cards={_cardControls?.Count ?? -1} " +
+                $"numbered={_numberedControls?.Count ?? -1} removal={_removalControls?.Count ?? -1} " +
                 $"characters={_characterControls?.Count ?? -1} proceed={(_proceedButton != null)}");
         }
     }
@@ -53,46 +78,28 @@ internal static class ShopOverlay
         if (_shopRoot == null)
             return;
 
-        int slot = 1;
-        if (_characterControls != null)
+        CollectDirectTargets(targets, _merchantButtonControls, "ShopMerchant", c => ActivateWare(c, 0));
+        CollectDirectTargets(targets, _characterControls, "ShopCharacter", ActivateCharacter);
+        CollectDirectTargets(targets, _cardControls, "ShopCard", c => ActivateWare(c, 0));
+        CollectDirectTargets(targets, _removalControls, "ShopRemoval", c => ActivateWare(c, 0), RemovalHitboxPadding);
+
+        if (_numberedControls != null)
         {
-            foreach (var control in _characterControls)
+            for (int i = 0; i < _numberButtons.Count && i < _numberedControls.Count; i++)
             {
-                if (!IsSelectable(control))
+                var button = _numberButtons[i];
+                var ware = _numberedControls[i];
+                if (button == null || !NodeQuery.IsLive(button) || !button.Visible)
+                    continue;
+                if (!IsSelectable(ware))
                     continue;
 
-                if (ControlHitboxService.TryGetDwellRect(control, out var rect))
-                {
-                    var captured = control;
-                    targets.Add(DwellHoverService.Menu(
-                        rect,
-                        () => ActivateCharacter(captured),
-                        $"ShopCharacter:{slot}"));
-                }
-
-                slot++;
-            }
-        }
-
-        slot = 1;
-        if (_wareControls != null)
-        {
-            foreach (var control in _wareControls)
-            {
-                if (!IsSelectable(control))
-                    continue;
-
-                if (ControlHitboxService.TryGetDwellRect(control, out var rect))
-                {
-                    var captured = control;
-                    int capturedSlot = slot;
-                    targets.Add(DwellHoverService.Menu(
-                        rect,
-                        () => ActivateWare(captured, capturedSlot),
-                        $"ShopWare:{slot}"));
-                }
-
-                slot++;
+                var captured = ware;
+                int capturedSlot = i + 1;
+                targets.Add(DwellHoverService.Menu(
+                    button.GetGlobalRect(),
+                    () => ActivateWare(captured, capturedSlot),
+                    $"ShopNumber:{capturedSlot}"));
             }
         }
 
@@ -108,44 +115,55 @@ internal static class ShopOverlay
     internal static void Hide()
     {
         _shopRoot = null;
-        _wareControls = null;
+        _cardControls = null;
+        _numberedControls = null;
+        _removalControls = null;
+        _merchantButtonControls = null;
         _characterControls = null;
         _proceedButton = null;
         _framesSinceScan = 0;
+        HideNumberButtons();
     }
 
     internal static bool TryRouteClick(Vector2 globalPos, out string message)
     {
         message = string.Empty;
 
-        if (_characterControls != null)
+        if (TryRouteDirectClick(globalPos, _merchantButtonControls, c => ActivateWare(c, 0), "Shop merchant clicked"))
         {
-            foreach (var control in _characterControls)
-            {
-                if (!IsSelectable(control))
-                    continue;
-                if (!ControlHitboxService.TryGetDwellRect(control, out var rect) || !rect.HasPoint(globalPos))
-                    continue;
-
-                ActivateCharacter(control);
-                message = "Shop character clicked";
-                return true;
-            }
+            message = "Shop merchant clicked";
+            return true;
         }
 
-        if (_wareControls != null)
+        if (TryRouteDirectClick(globalPos, _characterControls, ActivateCharacter, "Shop character clicked"))
         {
-            foreach (var control in _wareControls)
-            {
-                if (!IsSelectable(control))
-                    continue;
-                if (!ControlHitboxService.TryGetDwellRect(control, out var rect) || !rect.HasPoint(globalPos))
-                    continue;
+            message = "Shop character clicked";
+            return true;
+        }
 
-                ActivateWare(control, 0);
-                message = "Shop ware clicked";
-                return true;
-            }
+        if (TryRouteDirectClick(globalPos, _cardControls, c => ActivateWare(c, 0), "Shop card clicked"))
+        {
+            message = "Shop card clicked";
+            return true;
+        }
+
+        if (TryRouteDirectClick(globalPos, _removalControls, c => ActivateWare(c, 0), "Shop removal clicked"))
+        {
+            message = "Shop removal clicked";
+            return true;
+        }
+
+        for (int i = 0; i < _numberButtons.Count && _numberedControls != null && i < _numberedControls.Count; i++)
+        {
+            var button = _numberButtons[i];
+            if (button == null || !NodeQuery.IsLive(button) || !button.Visible)
+                continue;
+            if (!button.GetGlobalRect().HasPoint(globalPos))
+                continue;
+
+            ActivateWare(_numberedControls[i], i + 1);
+            message = "Shop numbered ware clicked";
+            return true;
         }
 
         if (TryGetProceedRect(out var proceedRect) && proceedRect.HasPoint(globalPos))
@@ -160,38 +178,177 @@ internal static class ShopOverlay
         return false;
     }
 
+    private static void CollectDirectTargets(
+        List<DwellHoverService.Target> targets,
+        List<Control>? controls,
+        string labelPrefix,
+        Action<Control> activate,
+        float padding = 0f)
+    {
+        if (controls == null)
+            return;
+
+        int slot = 1;
+        foreach (var control in controls)
+        {
+            if (!IsSelectable(control))
+            {
+                slot++;
+                continue;
+            }
+
+            if (!TryGetControlRect(control, padding, out var rect))
+            {
+                slot++;
+                continue;
+            }
+
+            var captured = control;
+            targets.Add(DwellHoverService.Menu(
+                rect,
+                () => activate(captured),
+                $"{labelPrefix}:{slot}"));
+            slot++;
+        }
+    }
+
+    private static bool TryRouteDirectClick(
+        Vector2 globalPos,
+        List<Control>? controls,
+        Action<Control> activate,
+        string _)
+    {
+        if (controls == null)
+            return false;
+
+        foreach (var control in controls)
+        {
+            if (!IsSelectable(control))
+                continue;
+            if (!TryGetControlRect(control, 0f, out var rect) || !rect.HasPoint(globalPos))
+                continue;
+
+            activate(control);
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryGetControlRect(Control control, float padding, out Rect2 rect)
+    {
+        rect = default;
+
+        // Shop cards render as an inner NCard visual that is offset from (and a different size than) the
+        // slot's layout rect, so the slot rect sits low/right and inconsistent. Anchor the dwell box to the
+        // card visual — the same rect the combat hand uses — so it lines up with the art.
+        if (control is NMerchantSlot cardSlot
+            && ShopSelectionService.SlotContains<NMerchantCard>(cardSlot)
+            && TryGetCardVisualRect(cardSlot, out rect))
+        {
+            if (padding > 0f)
+                rect = rect.Grow(padding);
+
+            return rect.Size.X >= 8f && rect.Size.Y >= 8f;
+        }
+
+        if (!ControlHitboxService.TryGetDwellRect(control, out rect))
+            rect = control.GetGlobalRect();
+
+        if (rect.Size.X < 8f || rect.Size.Y < 8f)
+            return false;
+
+        if (padding > 0f)
+            rect = rect.Grow(padding);
+
+        return true;
+    }
+
+    private static bool TryGetCardVisualRect(Node slot, out Rect2 rect)
+    {
+        rect = default;
+
+        // The card visual is a centre-pivoted, scaled NCard whose own Control has zero size; its layout rect is
+        // useless. The slot's clickable hitbox (the control the game hit-tests) carries the real local offset and
+        // scale, so its canvas-transformed rect is the true on-screen click region — matching the cursor.
+        float bestArea = 0f;
+        foreach (var clickable in NodeQuery.FindAll<NClickableControl>(slot))
+        {
+            if (clickable is not Control ctrl || !NodeQuery.IsVisible(ctrl))
+                continue;
+
+            if (!TryScreenRect(ctrl, out var candidate))
+                continue;
+
+            float area = candidate.Size.X * candidate.Size.Y;
+            if (area > bestArea && candidate.Size.X >= 24f && candidate.Size.Y >= 24f)
+            {
+                bestArea = area;
+                rect = candidate;
+            }
+        }
+
+        return bestArea > 0f;
+    }
+
+    private static bool TryScreenRect(Control control, out Rect2 rect)
+    {
+        var size = control.Size;
+        if (size.X < 1f || size.Y < 1f)
+            size = control.GetRect().Size;
+
+        rect = control.GetGlobalTransformWithCanvas() * new Rect2(Vector2.Zero, size);
+        return rect.Size.X >= 1f && rect.Size.Y >= 1f;
+    }
+
     private static void Rescan(Node shopRoot)
     {
         var searchRoot = ResolveSearchRoot(shopRoot);
-        var wares = new List<Control>();
+        var cards = new List<Control>();
+        var numbered = new List<Control>();
+        var removal = new List<Control>();
+        var merchantButtons = new List<Control>();
         var characters = new List<Control>();
+        bool inventoryOpen = ShopInventoryQuery.IsInventoryOpen(searchRoot);
 
-        foreach (var button in NodeQuery.FindAllSortedByPosition<NMerchantButton>(searchRoot))
-            TryAddUnique(wares, button);
+        if (!inventoryOpen)
+        {
+            foreach (var button in NodeQuery.FindAllSortedByPosition<NMerchantButton>(searchRoot))
+                TryAddUnique(merchantButtons, button);
+        }
+        else
+        {
+            foreach (var slot in NodeQuery.FindAllSortedByPosition<NMerchantSlot>(searchRoot))
+            {
+                if (!IsSelectable(slot))
+                    continue;
 
-        foreach (var card in NodeQuery.FindAllSortedByPosition<NMerchantCard>(searchRoot))
-            TryAddUnique(wares, card);
+                if (ShopSelectionService.SlotContains<NMerchantCardRemoval>(slot))
+                    TryAddUnique(removal, slot);
+                else if (ShopSelectionService.SlotContains<NMerchantCard>(slot))
+                    TryAddUnique(cards, slot);
+                else if (ShopSelectionService.SlotContains<NMerchantRelic>(slot)
+                         || ShopSelectionService.SlotContains<NMerchantPotion>(slot))
+                    TryAddUnique(numbered, slot);
+            }
 
-        foreach (var relic in NodeQuery.FindAllSortedByPosition<NMerchantRelic>(searchRoot))
-            TryAddUnique(wares, relic);
-
-        foreach (var potion in NodeQuery.FindAllSortedByPosition<NMerchantPotion>(searchRoot))
-            TryAddUnique(wares, potion);
-
-        foreach (var removal in NodeQuery.FindAllSortedByPosition<NMerchantCardRemoval>(searchRoot))
-            TryAddUnique(wares, removal);
-
-        foreach (var slot in NodeQuery.FindAllSortedByPosition<NMerchantSlot>(searchRoot))
-            TryAddUnique(wares, slot);
+            numbered.Sort((a, b) =>
+            {
+                int cmp = a.GlobalPosition.Y.CompareTo(b.GlobalPosition.Y);
+                return cmp != 0 ? cmp : a.GlobalPosition.X.CompareTo(b.GlobalPosition.X);
+            });
+        }
 
         CollectCharacterControls(searchRoot, characters);
 
-        _wareControls = wares;
+        _cardControls = cards;
+        _numberedControls = numbered;
+        _removalControls = removal;
+        _merchantButtonControls = merchantButtons;
         _characterControls = characters;
         _proceedButton = FindProceedButton(searchRoot);
     }
 
-    /// <summary>Proceed and inventory often live above the room node — search the whole scene.</summary>
     private static Node ResolveSearchRoot(Node shopRoot)
     {
         var tree = Engine.GetMainLoop() as SceneTree;
@@ -206,10 +363,8 @@ internal static class ShopOverlay
 
         foreach (var button in NodeQuery.FindAll<NProceedButton>(tree.Root))
         {
-            if (!IsSelectable(button))
-                continue;
-
-            return button;
+            if (IsSelectable(button))
+                return button;
         }
 
         return null;
@@ -228,7 +383,6 @@ internal static class ShopOverlay
         }
     }
 
-    /// <summary>NMerchantCharacter is not a Control — resolve its clickable child for dwell/ForceClick.</summary>
     private static Control? ResolveCharacterClickTarget(NMerchantCharacter character)
     {
         foreach (var clickable in NodeQuery.FindAll<NClickableControl>(character))
@@ -254,6 +408,92 @@ internal static class ShopOverlay
         }
 
         return best;
+    }
+
+    private static void SyncNumberButtons()
+    {
+        if (_numberedControls == null)
+            return;
+
+        EnsureCanvas();
+        if (_root == null)
+            return;
+
+        _root.Visible = true;
+
+        while (_numberButtons.Count < _numberedControls.Count)
+        {
+            var button = OverlayButtonFactory.CreateMenuButton(
+                $"ShopPick{_numberButtons.Count + 1}",
+                (_numberButtons.Count + 1).ToString(),
+                NumberSize,
+                new Color(0.10f, 0.08f, 0.02f, 0.95f),
+                new Color(1f, 0.82f, 0.30f, 1f),
+                () => { });
+            button.MouseFilter = Control.MouseFilterEnum.Ignore;
+            _root.AddChild(button);
+            _numberButtons.Add(button);
+        }
+
+        for (int i = 0; i < _numberButtons.Count; i++)
+        {
+            var button = _numberButtons[i];
+            if (button == null || !NodeQuery.IsLive(button))
+                continue;
+
+            if (i >= _numberedControls.Count
+                || !IsSelectable(_numberedControls[i])
+                || !ControlHitboxService.TryGetDwellRect(_numberedControls[i], out var wareRect))
+            {
+                button.Visible = false;
+                continue;
+            }
+
+            OverlayButtonFactory.ApplySize(button, NumberSize);
+
+            float x = wareRect.Position.X - NumberSize - NumberGap;
+            if (x < ScreenMargin)
+                x = wareRect.End.X + NumberGap;
+
+            float y = wareRect.GetCenter().Y - (NumberSize / 2f);
+            button.GlobalPosition = new Vector2(x, y);
+            button.Visible = true;
+        }
+    }
+
+    private static void HideNumberButtons()
+    {
+        foreach (var button in _numberButtons)
+        {
+            if (button != null && NodeQuery.IsLive(button))
+                button.Visible = false;
+        }
+
+        if (_root != null && NodeQuery.IsLive(_root))
+            _root.Visible = false;
+    }
+
+    private static void EnsureCanvas()
+    {
+        if (_layer != null && NodeQuery.IsLive(_layer) && _root != null && NodeQuery.IsLive(_root))
+            return;
+
+        var tree = Engine.GetMainLoop() as SceneTree;
+        if (tree?.Root == null)
+            return;
+
+        _layer = new CanvasLayer { Layer = CanvasLayerOrder, Name = "DwellShopLayer" };
+        tree.Root.AddChild(_layer);
+
+        _root = new Control
+        {
+            Name = "DwellShopRoot",
+            MouseFilter = Control.MouseFilterEnum.Ignore
+        };
+        _root.SetAnchorsPreset(Control.LayoutPreset.FullRect);
+        _layer.AddChild(_root);
+
+        _numberButtons.Clear();
     }
 
     private static bool TryGetProceedRect(out Rect2 rect)
@@ -282,27 +522,10 @@ internal static class ShopOverlay
         ModLogger.Info("Shop proceed via E accept key.");
     }
 
-    private static void ActivateCharacter(Control control)
-    {
-        if (!NodeQuery.IsLive(control))
-            return;
+    private static void ActivateCharacter(Control control) => ActivateWare(control, 0);
 
-        if (InputForwardService.TryActivateControl(control))
-            ModLogger.Info($"Shop character '{control.Name}' activated.");
-        else
-            ModLogger.Warn($"Shop character '{control.Name}' activation failed.");
-    }
-
-    private static void ActivateWare(Control control, int slot)
-    {
-        if (!NodeQuery.IsLive(control))
-            return;
-
-        if (InputForwardService.TryActivateControl(control))
-            ModLogger.Info($"Shop ware #{slot} '{control.Name}' activated.");
-        else
-            ModLogger.Warn($"Shop ware #{slot} '{control.Name}' activation failed.");
-    }
+    private static void ActivateWare(Control control, int slot) =>
+        ShopSelectionService.TryPurchase(control, slot);
 
     private static bool IsSelectable(Control control) =>
         NodeQuery.IsLive(control)

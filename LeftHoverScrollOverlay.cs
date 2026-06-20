@@ -3,19 +3,28 @@ using Godot;
 namespace DwellTargeting;
 
 /// <summary>
-/// Large ▲/▼ hover zones on the left edge for wheel-style scrolling without dragging.
-/// Map uses two vertical pairs; pile/card selection screens use one centered pair.
+/// Large ▲/▼ hover zones for wheel-style scrolling without dragging.
+/// Map: one pair on the left (inset toward the map) and one on the right (original position).
+/// Pile/card selection screens: one centered pair on the left.
 /// </summary>
 internal static class LeftHoverScrollOverlay
 {
     private const int CanvasLayerOrder = 129;
     private const int ArrowSize = 70;
     private const int ArrowGap = 18;
-    private const float LeftMargin = 40f;
+    private const float EdgeMargin = 40f;
+    private const float MapLeftInset = 130f;
     private const int ScrollIntervalFrames = 3;
 
-    private static readonly float[] MapCenterFractions = [0.33f, 0.67f];
-    private static readonly float[] PileCenterFractions = [0.5f];
+    private readonly record struct StripPlacement(float CenterYFraction, bool OnRightEdge);
+
+    private static readonly StripPlacement[] MapPlacements =
+    [
+        new(0.5f, OnRightEdge: false),
+        new(0.5f, OnRightEdge: true),
+    ];
+
+    private static readonly StripPlacement[] PilePlacements = [new(0.5f, OnRightEdge: false)];
 
     private static CanvasLayer? _layer;
     private static Control? _root;
@@ -27,13 +36,13 @@ internal static class LeftHoverScrollOverlay
     internal static void SyncMap()
     {
         _activeTag = "Map";
-        SyncStrips(MapCenterFractions);
+        SyncStrips(MapPlacements);
     }
 
     internal static void SyncPileSelect()
     {
         _activeTag = "Pile";
-        SyncStrips(PileCenterFractions);
+        SyncStrips(PilePlacements);
     }
 
     internal static void UpdateFrame()
@@ -53,14 +62,14 @@ internal static class LeftHoverScrollOverlay
             _root.Visible = false;
     }
 
-    private static void SyncStrips(float[] centerFractions)
+    private static void SyncStrips(StripPlacement[] placements)
     {
         EnsureCanvas();
         if (_root == null)
             return;
 
-        EnsureStripCount(centerFractions.Length);
-        PositionStrips(centerFractions);
+        EnsureStripCount(placements.Length);
+        PositionStrips(placements);
         _root.Visible = true;
         HandleHoverScroll();
     }
@@ -110,18 +119,30 @@ internal static class LeftHoverScrollOverlay
         }
     }
 
-    private static void PositionStrips(float[] centerFractions)
+    private static void PositionStrips(StripPlacement[] placements)
     {
         if (_root == null)
             return;
 
         var size = _root.GetViewportRect().Size;
-        float x = LeftMargin;
 
         for (int i = 0; i < _strips.Count; i++)
         {
-            float centerY = size.Y * centerFractions[i];
             var (up, down) = _strips[i];
+            if (i >= placements.Length)
+            {
+                up.Visible = false;
+                down.Visible = false;
+                continue;
+            }
+
+            var placement = placements[i];
+            float x = placement.OnRightEdge
+                ? size.X - EdgeMargin - ArrowSize
+                : _activeTag == "Map"
+                    ? MapLeftInset
+                    : EdgeMargin;
+            float centerY = size.Y * placement.CenterYFraction;
 
             up.Size = new Vector2(ArrowSize, ArrowSize);
             down.Size = new Vector2(ArrowSize, ArrowSize);
@@ -129,12 +150,6 @@ internal static class LeftHoverScrollOverlay
             down.GlobalPosition = new Vector2(x, centerY + (ArrowGap / 2f));
             up.Visible = true;
             down.Visible = true;
-        }
-
-        for (int i = centerFractions.Length; i < _strips.Count; i++)
-        {
-            _strips[i].Up.Visible = false;
-            _strips[i].Down.Visible = false;
         }
     }
 
@@ -164,12 +179,12 @@ internal static class LeftHoverScrollOverlay
         if (tree?.Root == null)
             return;
 
-        _layer = new CanvasLayer { Layer = CanvasLayerOrder, Name = "DwellLeftScrollLayer" };
+        _layer = new CanvasLayer { Layer = CanvasLayerOrder, Name = "DwellHoverScrollLayer" };
         tree.Root.AddChild(_layer);
 
         _root = new Control
         {
-            Name = "DwellLeftScrollRoot",
+            Name = "DwellHoverScrollRoot",
             MouseFilter = Control.MouseFilterEnum.Ignore
         };
         _root.SetAnchorsPreset(Control.LayoutPreset.FullRect);
