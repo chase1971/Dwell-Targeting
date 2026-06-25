@@ -212,7 +212,7 @@ internal static class SettingsOverlay
             }
 
             _uiReady = true;
-            HandTargetingOverlay.EnsureInputRouterAlways();
+            OverlayCanvasHost.EnsureInputRouter();
             SyncVisibility();
             UpdateBounds();
             ModLogger.Info("In-game settings UI attached — SET top-left or F8.");

@@ -11,18 +11,54 @@ namespace DwellTargeting;
 /// </summary>
 internal static class HandTargetingOverlay
 {
-    private const int GapAboveCard = 28;
-    private const int CanvasLayerOrder = 128;
-    private const float HandBlockPadding = 24f;
-
-    private static DwellInputRouter? _inputRouter;
-    private static CanvasLayer? _layer;
-    private static Control? _fallbackRoot;
-    private static Rect2 _handBlockBounds;
-    private static readonly Dictionary<ulong, CardButtonRow> _rows = new();
     private static bool _hooked;
     private static bool _isTornDown = true;
     private static OverlayMode _activeOverlayMode = OverlayMode.None;
+
+    /// <summary>How a screen mode treats the left / hover scroll strips when it becomes active.</summary>
+    private enum ScrollStripHide
+    {
+        None,            // leave the scroll strips alone (Map, Event)
+        Both,            // hide both the left and hover scroll strips
+        ShopConditional, // hide the left strip; hide the hover strip only when no deck view is open
+    }
+
+    /// <summary>
+    /// A full-screen mode overlay (rewards, pile-select, map, event, shop, room) and the
+    /// auxiliary behavior its sync needs. Replaces the six near-identical Sync*Mode methods
+    /// and the three hand-written mode switches (collect / process-frame / sync).
+    /// </summary>
+    private sealed record ScreenOverlay(
+        OverlayMode Mode,
+        Action Sync,
+        Action Hide,
+        Action<List<DwellHoverService.Target>> Collect,
+        ScrollStripHide ScrollStrips = ScrollStripHide.None,
+        bool ResyncUtilityBar = false);
+
+    /// <summary>
+    /// The registry. Adding a new screen mode is now a single entry here plus an overlay class
+    /// exposing Sync()/Hide()/CollectDwellTargets() — no edits to the per-frame dispatch.
+    /// </summary>
+    private static readonly Dictionary<OverlayMode, ScreenOverlay> ScreenOverlays = new()
+    {
+        [OverlayMode.Rewards] = new(
+            OverlayMode.Rewards, RewardsOverlay.Sync, RewardsOverlay.Hide, RewardsOverlay.CollectDwellTargets,
+            ScrollStripHide.Both),
+        [OverlayMode.PileSelect] = new(
+            OverlayMode.PileSelect, PileSelectOverlay.Sync, PileSelectOverlay.Hide, PileSelectOverlay.CollectDwellTargets,
+            ScrollStripHide.Both, ResyncUtilityBar: true),
+        [OverlayMode.Map] = new(
+            OverlayMode.Map, MapOverlay.Sync, MapOverlay.Hide, MapOverlay.CollectDwellTargets),
+        [OverlayMode.Event] = new(
+            OverlayMode.Event, EventOverlay.Sync, EventOverlay.Hide, EventOverlay.CollectDwellTargets),
+        [OverlayMode.Shop] = new(
+            OverlayMode.Shop, ShopOverlay.Sync, ShopOverlay.Hide, ShopOverlay.CollectDwellTargets,
+            ScrollStripHide.ShopConditional),
+        [OverlayMode.Room] = new(
+            OverlayMode.Room, RoomOverlay.Sync, RoomOverlay.Hide, RoomOverlay.CollectDwellTargets,
+            ScrollStripHide.Both, ResyncUtilityBar: true),
+    };
 
     internal static void EnsureInitialized()
     {
@@ -66,23 +102,14 @@ internal static class HandTargetingOverlay
             targets.Add(endTurn.Value);
 
         var mode = OverlayModeService.GetMode();
-        if (mode == OverlayMode.Rewards)
-            RewardsOverlay.CollectDwellTargets(targets);
-        else if (mode == OverlayMode.PileSelect)
-            PileSelectOverlay.CollectDwellTargets(targets);
-        else if (mode == OverlayMode.Map)
-            MapOverlay.CollectDwellTargets(targets);
-        else if (mode == OverlayMode.Event)
-            EventOverlay.CollectDwellTargets(targets);
-        else if (mode == OverlayMode.Shop)
-            ShopOverlay.CollectDwellTargets(targets);
-        else if (mode == OverlayMode.Room)
-            RoomOverlay.CollectDwellTargets(targets);
+        if (ScreenOverlays.TryGetValue(mode, out var screen))
+        {
+            screen.Collect(targets);
+        }
         else
         {
             PotionPopupOverlay.CollectDwellTargets(targets);
-            foreach (var row in _rows.Values)
-                row.CollectDwellTargets(targets);
+            CombatRowsCoordinator.CollectDwellTargets(targets);
         }
     }
 
@@ -113,11 +140,8 @@ internal static class HandTargetingOverlay
         if (PotionPopupOverlay.TryRouteClick(globalPos, out message))
             return true;
 
-        foreach (var row in _rows.Values)
-        {
-            if (row.TryActivateAt(globalPos, out message))
-                return true;
-        }
+        if (CombatRowsCoordinator.TryActivateAt(globalPos, out message))
+            return true;
 
         return false;
     }
@@ -143,10 +167,7 @@ internal static class HandTargetingOverlay
         if (TryHitDwellButton(globalPos, out _))
             return false;
 
-        if (_handBlockBounds.Size.X < 1 || _handBlockBounds.Size.Y < 1)
-            return false;
-
-        return _handBlockBounds.HasPoint(globalPos);
+        return CombatRowsCoordinator.HandBlockContains(globalPos);
     }
 
     internal static bool TryHitDwellButton(Vector2 globalPos, out string message)
@@ -173,11 +194,8 @@ internal static class HandTargetingOverlay
         if (PotionPopupOverlay.TryHitDwellButton(globalPos, out message))
             return true;
 
-        foreach (var row in _rows.Values)
-        {
-            if (row.TryHitAt(globalPos, out message))
-                return true;
-        }
+        if (CombatRowsCoordinator.TryHitAt(globalPos, out message))
+            return true;
 
         return false;
     }
@@ -212,7 +230,7 @@ internal static class HandTargetingOverlay
                     TearDown();
                 UtilityBarOverlay.Sync(showUtility);
                 if (showUtility)
-                    EnsureInputRouter();
+                    OverlayCanvasHost.EnsureInputRouter();
                 FinalizeDwellTargets();
                 return;
             }
@@ -223,14 +241,14 @@ internal static class HandTargetingOverlay
 
                 // A selection screen just appeared — block accidental instant picks until the
                 // cursor settles and moves again.
-                if (mode is OverlayMode.Rewards or OverlayMode.PileSelect or OverlayMode.Map or OverlayMode.Event or OverlayMode.Shop or OverlayMode.Room)
+                if (ScreenOverlays.ContainsKey(mode))
                     DwellHoverService.ArmGrace(1.0f);
 
                 _isTornDown = false;
                 _activeOverlayMode = mode;
             }
 
-            EnsureInputRouter();
+            OverlayCanvasHost.EnsureInputRouter();
 
             // A deck / draw / exhaust / card-pile view (or the map) opened on top of combat: combat is
             // still in progress underneath, so suppress the combat overlay to stop its play buttons
@@ -243,54 +261,16 @@ internal static class HandTargetingOverlay
                 return;
             }
 
-            if (mode == OverlayMode.Rewards)
+            if (ScreenOverlays.TryGetValue(mode, out var screenOverlay))
             {
-                SyncRewardsMode();
+                SyncScreenMode(screenOverlay);
                 FinalizeDwellTargets();
                 return;
             }
 
-            if (mode == OverlayMode.PileSelect)
-            {
-                SyncPileSelectMode();
-                FinalizeDwellTargets();
-                return;
-            }
-
-            if (mode == OverlayMode.Map)
-            {
-                SyncMapMode();
-                FinalizeDwellTargets();
-                return;
-            }
-
-            if (mode == OverlayMode.Event)
-            {
-                SyncEventMode();
-                FinalizeDwellTargets();
-                return;
-            }
-
-            if (mode == OverlayMode.Shop)
-            {
-                SyncShopMode();
-                FinalizeDwellTargets();
-                return;
-            }
-
-            if (mode == OverlayMode.Room)
-            {
-                SyncRoomMode();
-                FinalizeDwellTargets();
-                return;
-            }
-
-            RewardsOverlay.Hide();
-            PileSelectOverlay.Hide();
-            MapOverlay.Hide();
-            EventOverlay.Hide();
-            ShopOverlay.Hide();
-            RoomOverlay.Hide();
+            // Combat / hand-select path: make sure every screen overlay is hidden first.
+            foreach (var screen in ScreenOverlays.Values)
+                screen.Hide();
 
             var hand = NPlayerHand.Instance;
             if (hand == null)
@@ -313,20 +293,20 @@ internal static class HandTargetingOverlay
             else
                 MouseCardPlayBlocker.Release();
 
-            EnsureFallbackCanvas();
+            OverlayCanvasHost.EnsureFallbackCanvas();
 
             if (mode == OverlayMode.HandSelect)
             {
                 EndTurnOverlay.Hide();
                 EnemyLabelOverlay.Hide();
                 ConfirmOverlay.Sync(visible: true);
-                SyncHandSelectRows(hand);
+                CombatRowsCoordinator.SyncHandSelect(hand, OverlayCanvasHost.FallbackRoot);
             }
             else
             {
                 ConfirmOverlay.Hide();
                 EndTurnOverlay.Sync(visible: true);
-                SyncCombatPlayRows(hand);
+                CombatRowsCoordinator.SyncCombatPlay(hand, OverlayCanvasHost.FallbackRoot);
             }
 
             long potionStart = OverlayPerfDiagnostics.BeginTick();
@@ -369,63 +349,51 @@ internal static class HandTargetingOverlay
         }
     }
 
-    private static void SyncPileSelectMode()
+    /// <summary>
+    /// Sync a single full-screen mode overlay and hide everything else. Replaces the six
+    /// Sync*Mode methods.
+    ///
+    /// NOTE: do NOT call DwellHoverService.Reset() here — this runs every frame, and resetting
+    /// every frame zeroes the dwell timer before it can reach the activation threshold (that bug
+    /// made native dwell unusable on the rewards / pile-select / map / event / shop / room screens).
+    ///
+    /// The old per-mode methods each hand-listed which overlays to hide, and the lists disagreed —
+    /// e.g. SyncRewardsMode never hid PileSelect. Hiding *every* other screen overlay uniformly
+    /// closes that class of stale-button bleed-through (backlog B2).
+    /// </summary>
+    private static void SyncScreenMode(ScreenOverlay active)
     {
-        // NOTE: do NOT call DwellHoverService.Reset() here — this runs every frame, and resetting
-        // every frame zeroes the dwell timer before it can ever reach the activation threshold
-        // (that bug made native dwell unusable on the rewards / pile-select screens).
         HandInputBlocker.Release();
         MouseCardPlayBlocker.Release();
         HandLayoutDiagnostics.Reset();
         EndTurnOverlay.Hide();
         ConfirmOverlay.Hide();
-        ClearHandRows();
+        CombatRowsCoordinator.Clear();
         EnemyLabelOverlay.Hide();
-        RewardsOverlay.Hide();
-        MapOverlay.Hide();
-        LeftHoverScrollOverlay.Hide();
-        HoverScrollStripOverlay.Hide();
-        EventOverlay.Hide();
-        ShopOverlay.Hide();
-        RoomOverlay.Hide();
-        PileSelectOverlay.Sync();
-        UtilityBarOverlay.Sync(RunManager.Instance.IsInProgress);
-    }
 
-    private static void SyncMapMode()
-    {
-        // NOTE: like the rewards/pile screens, do NOT reset the dwell service every frame here.
-        HandInputBlocker.Release();
-        MouseCardPlayBlocker.Release();
-        HandLayoutDiagnostics.Reset();
-        EndTurnOverlay.Hide();
-        ConfirmOverlay.Hide();
-        ClearHandRows();
-        EnemyLabelOverlay.Hide();
-        RewardsOverlay.Hide();
-        PileSelectOverlay.Hide();
-        EventOverlay.Hide();
-        ShopOverlay.Hide();
-        RoomOverlay.Hide();
-        MapOverlay.Sync();
-    }
+        foreach (var screen in ScreenOverlays.Values)
+        {
+            if (screen.Mode != active.Mode)
+                screen.Hide();
+        }
 
-    private static void SyncEventMode()
-    {
-        // NOTE: like the rewards/pile/map screens, do NOT reset the dwell service every frame here.
-        HandInputBlocker.Release();
-        MouseCardPlayBlocker.Release();
-        HandLayoutDiagnostics.Reset();
-        EndTurnOverlay.Hide();
-        ConfirmOverlay.Hide();
-        ClearHandRows();
-        EnemyLabelOverlay.Hide();
-        RewardsOverlay.Hide();
-        PileSelectOverlay.Hide();
-        MapOverlay.Hide();
-        ShopOverlay.Hide();
-        RoomOverlay.Hide();
-        EventOverlay.Sync();
+        switch (active.ScrollStrips)
+        {
+            case ScrollStripHide.Both:
+                LeftHoverScrollOverlay.Hide();
+                HoverScrollStripOverlay.Hide();
+                break;
+            case ScrollStripHide.ShopConditional:
+                LeftHoverScrollOverlay.Hide();
+                if (!CombatViewSuppressionQuery.IsDeckViewOpen())
+                    HoverScrollStripOverlay.Hide();
+                break;
+        }
+
+        active.Sync();
+
+        if (active.ResyncUtilityBar)
+            UtilityBarOverlay.Sync(RunManager.Instance.IsInProgress);
     }
 
     private static void SuppressCombatForView()
@@ -439,284 +407,13 @@ internal static class HandTargetingOverlay
         ConfirmOverlay.Hide();
         EnemyLabelOverlay.Hide();
         PotionPopupOverlay.Hide();
-        ClearHandRows();
-    }
-
-    private static void SyncShopMode()
-    {
-        HandInputBlocker.Release();
-        MouseCardPlayBlocker.Release();
-        HandLayoutDiagnostics.Reset();
-        EndTurnOverlay.Hide();
-        ConfirmOverlay.Hide();
-        ClearHandRows();
-        EnemyLabelOverlay.Hide();
-        RewardsOverlay.Hide();
-        PileSelectOverlay.Hide();
-        MapOverlay.Hide();
-        LeftHoverScrollOverlay.Hide();
-        if (!CombatViewSuppressionQuery.IsDeckViewOpen())
-            HoverScrollStripOverlay.Hide();
-        EventOverlay.Hide();
-        RoomOverlay.Hide();
-        ShopOverlay.Sync();
-    }
-
-    private static void SyncRoomMode()
-    {
-        // NOTE: like the rewards/pile/map/event screens, do NOT reset the dwell service every frame.
-        HandInputBlocker.Release();
-        MouseCardPlayBlocker.Release();
-        HandLayoutDiagnostics.Reset();
-        EndTurnOverlay.Hide();
-        ConfirmOverlay.Hide();
-        ClearHandRows();
-        EnemyLabelOverlay.Hide();
-        RewardsOverlay.Hide();
-        PileSelectOverlay.Hide();
-        MapOverlay.Hide();
-        LeftHoverScrollOverlay.Hide();
-        HoverScrollStripOverlay.Hide();
-        EventOverlay.Hide();
-        ShopOverlay.Hide();
-        RoomOverlay.Sync();
-        UtilityBarOverlay.Sync(RunManager.Instance.IsInProgress);
-    }
-
-    private static void SyncRewardsMode()
-    {
-        // NOTE: do NOT call DwellHoverService.Reset() here — see SyncPileSelectMode. Resetting every
-        // frame is what kept the native Proceed/Skip dwell from ever firing.
-        MapOverlay.Hide();
-        LeftHoverScrollOverlay.Hide();
-        HoverScrollStripOverlay.Hide();
-        EventOverlay.Hide();
-        ShopOverlay.Hide();
-        HandInputBlocker.Release();
-        MouseCardPlayBlocker.Release();
-        HandLayoutDiagnostics.Reset();
-        EndTurnOverlay.Hide();
-        ConfirmOverlay.Hide();
-        ClearHandRows();
-        EnemyLabelOverlay.Hide();
-        RoomOverlay.Hide();
-        RewardsOverlay.Sync();
-    }
-
-    private static void SyncCombatPlayRows(NPlayerHand hand)
-    {
-        long enemyStart = OverlayPerfDiagnostics.BeginTick();
-        var runState = RunManager.Instance.DebugOnlyGetState();
-        var player = runState == null ? null : MegaCrit.Sts2.Core.Context.LocalContext.GetMe(runState);
-        var enemies = EnemyOrderService.GetAliveEnemiesLeftToRight(player?.Creature.CombatState);
-        int enemyCount = enemies.Count;
-        OverlayPerfDiagnostics.Add("combat.enemyFetch", enemyStart);
-
-        long holderStart = OverlayPerfDiagnostics.BeginTick();
-        var holders = GetPlayModeHolders(hand);
-        OverlayPerfDiagnostics.Add("combat.holderFetch", holderStart);
-
-        HandLayoutDiagnostics.MaybeLog(hand, holders);
-
-        int handSize = holders.Count(h => h.CardModel != null && NodeQuery.IsVisible(h));
-        int buttonSize = SettingsStore.GetCardButtonSize(handSize);
-
-        long boundsStart = OverlayPerfDiagnostics.BeginTick();
-        Rect2 handBounds = ComputeHandBounds(holders);
-        OverlayPerfDiagnostics.Add("combat.handBounds", boundsStart);
-
-        long rowsStart = OverlayPerfDiagnostics.BeginTick();
-        var liveIds = new HashSet<ulong>();
-        foreach (var holder in holders)
-        {
-            var card = holder.CardModel;
-            if (card == null || !NodeQuery.IsVisible(holder))
-                continue;
-            if (!card.CanPlay(out _, out _))
-                continue;
-
-            ulong id = holder.GetInstanceId();
-            liveIds.Add(id);
-
-            if (!_rows.TryGetValue(id, out var row))
-            {
-                row = new CardButtonRow(holder, _fallbackRoot);
-                _rows[id] = row;
-                ModLogger.Info($"Button row for {card.Id.Entry} holder={id} parented={(holder is Control)}");
-            }
-
-            row.SyncPlay(card, enemyCount, holder, buttonSize);
-        }
-
-        UpdateHandBlockBounds(handBounds);
-        RemoveStaleRows(liveIds);
-        OverlayPerfDiagnostics.Add("combat.rowsSync", rowsStart);
-
-        long labelStart = OverlayPerfDiagnostics.BeginTick();
-        if (SettingsStore.Current.ShowEnemyLabels)
-            EnemyLabelOverlay.Sync(enemies, handSize);
-        else
-            EnemyLabelOverlay.Hide();
-        OverlayPerfDiagnostics.Add("combat.labels", labelStart);
-    }
-
-    private static void SyncHandSelectRows(NPlayerHand hand)
-    {
-        var holders = GetPlayModeHolders(hand);
-        HandLayoutDiagnostics.MaybeLog(hand, holders);
-
-        int handSize = holders.Count(h => h.CardModel != null && NodeQuery.IsVisible(h));
-        int buttonSize = SettingsStore.GetCardButtonSize(handSize);
-
-        var liveIds = new HashSet<ulong>();
-        int slot = 1;
-        foreach (var holder in holders)
-        {
-            var card = holder.CardModel;
-            if (card == null || !NodeQuery.IsVisible(holder))
-                continue;
-
-            ulong id = holder.GetInstanceId();
-            liveIds.Add(id);
-
-            if (!_rows.TryGetValue(id, out var row))
-            {
-                row = new CardButtonRow(holder, _fallbackRoot);
-                _rows[id] = row;
-                ModLogger.Info($"Select row for {card.Id.Entry} holder={id}");
-            }
-
-            row.SyncSelect(slot, holder, buttonSize);
-            slot++;
-        }
-
-        UpdateHandBlockBounds(default);
-        RemoveStaleRows(liveIds);
-    }
-
-    private static void RemoveStaleRows(HashSet<ulong> liveIds)
-    {
-        foreach (var pair in _rows.ToList())
-        {
-            if (!liveIds.Contains(pair.Key))
-            {
-                pair.Value.Dispose();
-                _rows.Remove(pair.Key);
-            }
-        }
-    }
-
-    private static void ClearHandRows()
-    {
-        foreach (var row in _rows.Values)
-            row.Dispose();
-        _rows.Clear();
-        _handBlockBounds = new Rect2(0, 0, 0, 0);
+        CombatRowsCoordinator.Clear();
     }
 
     private static double GetProcessDelta()
     {
         var tree = Engine.GetMainLoop() as SceneTree;
         return tree?.Root?.GetProcessDeltaTime() ?? (1.0 / 60.0);
-    }
-
-    private static Rect2 ComputeHandBounds(IReadOnlyList<NCardHolder> holders)
-    {
-        if (holders.Count == 0)
-            return new Rect2(0, 0, 0, 0);
-
-        float minX = float.MaxValue;
-        float maxX = float.MinValue;
-        float minY = float.MaxValue;
-        float maxY = float.MinValue;
-
-        foreach (var holder in holders)
-        {
-            if (!NodeQuery.IsVisible(holder))
-                continue;
-
-            if (!CardAnchorService.TryGetCardRect(holder, out Rect2 cardRect))
-                continue;
-
-            minX = Math.Min(minX, cardRect.Position.X);
-            maxX = Math.Max(maxX, cardRect.End.X);
-            minY = Math.Min(minY, cardRect.Position.Y);
-            maxY = Math.Max(maxY, cardRect.End.Y);
-        }
-
-        if (minX == float.MaxValue)
-            return new Rect2(0, 0, 0, 0);
-
-        float topPad = GapAboveCard + 90f;
-        return new Rect2(
-            minX - HandBlockPadding,
-            minY - topPad,
-            (maxX - minX) + (HandBlockPadding * 2f),
-            (maxY - minY) + topPad + HandBlockPadding);
-    }
-
-    private static void UpdateHandBlockBounds(Rect2 handBounds)
-    {
-        _handBlockBounds = handBounds;
-    }
-
-    private static List<NCardHolder> GetPlayModeHolders(NPlayerHand hand)
-    {
-        var holders = new List<NCardHolder>();
-        foreach (var holderObj in hand.ActiveHolders)
-        {
-            if (holderObj is NCardHolder typed)
-                holders.Add(typed);
-        }
-
-        if (holders.Count == 0)
-            holders.AddRange(NodeQuery.FindAllSortedByPosition<NCardHolder>(hand));
-
-        holders.Sort((a, b) =>
-        {
-            int cmp = a.GlobalPosition.X.CompareTo(b.GlobalPosition.X);
-            return cmp != 0 ? cmp : a.GetInstanceId().CompareTo(b.GetInstanceId());
-        });
-
-        return holders;
-    }
-
-    internal static void EnsureInputRouterAlways() => EnsureInputRouter();
-
-    private static void EnsureInputRouter()
-    {
-        if (_inputRouter != null && NodeQuery.IsLive(_inputRouter))
-            return;
-
-        var tree = Engine.GetMainLoop() as SceneTree;
-        if (tree?.Root == null)
-            return;
-
-        _inputRouter = new DwellInputRouter { Name = "DwellTargetingInputRouter", ProcessMode = Node.ProcessModeEnum.Always };
-        tree.Root.AddChild(_inputRouter);
-        ModLogger.Info("Input router attached to scene root.");
-    }
-
-    private static void EnsureFallbackCanvas()
-    {
-        if (_layer != null && NodeQuery.IsLive(_layer) && _fallbackRoot != null && NodeQuery.IsLive(_fallbackRoot))
-            return;
-
-        var tree = Engine.GetMainLoop() as SceneTree;
-        if (tree?.Root == null)
-            return;
-
-        _layer = new CanvasLayer { Layer = CanvasLayerOrder, Name = "DwellTargetingLayer" };
-        tree.Root.AddChild(_layer);
-
-        _fallbackRoot = new Control
-        {
-            Name = "DwellTargetingRoot",
-            MouseFilter = Control.MouseFilterEnum.Ignore
-        };
-        _fallbackRoot.SetAnchorsPreset(Control.LayoutPreset.FullRect);
-        _layer.AddChild(_fallbackRoot);
-        ModLogger.Info($"CanvasLayer created at layer {CanvasLayerOrder}.");
     }
 
     private static void SuppressForMenu()
@@ -737,7 +434,7 @@ internal static class HandTargetingOverlay
         ShopOverlay.Hide();
         RoomOverlay.Hide();
         BackButtonOverlay.Hide();
-        ClearHandRows();
+        CombatRowsCoordinator.Clear();
         _isTornDown = true;
         _activeOverlayMode = OverlayMode.None;
     }
@@ -763,7 +460,7 @@ internal static class HandTargetingOverlay
         BackButtonOverlay.Hide();
         PotionPopupOverlay.Hide();
         EnemyLabelOverlay.Hide();
-        ClearHandRows();
+        CombatRowsCoordinator.Clear();
         _isTornDown = true;
         _activeOverlayMode = OverlayMode.None;
     }
