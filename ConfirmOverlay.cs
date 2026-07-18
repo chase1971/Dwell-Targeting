@@ -1,11 +1,16 @@
 using Godot;
+using MegaCrit.Sts2.Core.Combat;
 using MegaCrit.Sts2.Core.Nodes.Cards;
 using MegaCrit.Sts2.Core.Nodes.Combat;
+using MegaCrit.Sts2.Core.Nodes.CommonUi;
+using MegaCrit.Sts2.Core.Nodes.GodotExtensions;
+using MegaCrit.Sts2.Core.Runs;
 
 namespace DwellTargeting;
 
 /// <summary>
-/// E / Accept button during hand selection (discard, upgrade pick, etc.).
+/// Optional E / Accept overlay during hand selection (discard, upgrade pick, etc.), plus native
+/// game Confirm button dwell whether or not the overlay is shown.
 /// </summary>
 internal static class ConfirmOverlay
 {
@@ -24,6 +29,11 @@ internal static class ConfirmOverlay
     private static Rect2 _cachedPreviewRect;
     private static Vector2 _cachedPreviewPos;
     private static int _buttonLayoutSizeHash;
+    private static int _framesSincePreviewScan;
+    private static bool _previewScanExhausted;
+
+    private static NCombatUi? _cachedCombatUi;
+    private static Control? _cachedNativeButton;
 
     internal static void Sync(bool visible)
     {
@@ -38,42 +48,68 @@ internal static class ConfirmOverlay
             return;
 
         ApplyPresentation();
-        _button.Visible = true;
         PositionButton();
+        if (_button != null && NodeQuery.IsLive(_button))
+            _button.Visible = SettingsStore.Current.ShowOverlays;
     }
 
     internal static bool ContainsPoint(Vector2 globalPos) =>
-        _buttonBounds.Size.X >= 1 && _buttonBounds.HasPoint(globalPos);
+        (_buttonBounds.Size.X >= 1 && _buttonBounds.HasPoint(globalPos))
+        || NativeContainsPoint(globalPos);
 
     internal static bool TryHitAt(Vector2 globalPos)
     {
-        if (_button == null || !NodeQuery.IsLive(_button) || !_button.Visible)
-            return false;
+        if (_button != null && NodeQuery.IsLive(_button) && _button.Visible && _buttonBounds.HasPoint(globalPos))
+            return true;
 
-        return ContainsPoint(globalPos);
+        return NativeContainsPoint(globalPos);
     }
 
     internal static DwellHoverService.Target? GetDwellTarget()
     {
-        if (_button == null || !NodeQuery.IsLive(_button) || !_button.Visible)
+        if (_button == null || !NodeQuery.IsLive(_button) || _buttonBounds.Size.X < 1)
             return null;
 
-        return DwellHoverService.Menu(_buttonBounds, PressConfirm, "Confirm");
+        return DwellHoverService.Menu(_buttonBounds, PressConfirmCore, "Confirm");
+    }
+
+    internal static void CollectNativeDwellTargets(List<DwellHoverService.Target> targets)
+    {
+        if (OverlayModeService.GetMode() != OverlayMode.HandSelect)
+            return;
+
+        if (!RunManager.Instance.IsInProgress || !CombatManager.Instance.IsInProgress)
+            return;
+
+        if (!TryGetNativeConfirmButton(out var button))
+            return;
+
+        if (!ControlHitboxService.TryGetDwellRect(button, out var rect))
+            return;
+
+        targets.Add(DwellHoverService.Menu(rect, PressConfirmCore, "NativeConfirm"));
     }
 
     internal static bool TryActivateAt(Vector2 globalPos, out string message)
     {
         message = string.Empty;
-        if (_button == null || !NodeQuery.IsLive(_button) || !_button.Visible)
+
+        if (_button != null && NodeQuery.IsLive(_button) && _button.Visible && _buttonBounds.HasPoint(globalPos))
+        {
+            if (!DwellActivationCooldown.TryRunMenuAction(PressConfirmCore))
+                return false;
+
+            message = "Confirm button clicked";
+            return true;
+        }
+
+        if (!NativeContainsPoint(globalPos))
             return false;
 
-        if (!ContainsPoint(globalPos))
+        if (!DwellActivationCooldown.TryRunMenuAction(PressConfirmCore))
             return false;
 
-        if (!DwellActivationCooldown.TryRunMenuAction(PressConfirm))
-            return false;
-
-        message = "Confirm button clicked";
+        message = "Native Confirm clicked";
         return true;
     }
 
@@ -84,6 +120,41 @@ internal static class ConfirmOverlay
         _buttonBounds = new Rect2(0, 0, 0, 0);
         _cachedPreviewAnchor = null;
         _buttonLayoutSizeHash = 0;
+        _framesSincePreviewScan = 0;
+        _previewScanExhausted = false;
+        _cachedCombatUi = null;
+        _cachedNativeButton = null;
+    }
+
+    /// <summary>
+    /// One tree search when hand-select starts (discard, upgrade pick, etc.). No periodic rescan.
+    /// </summary>
+    internal static void RefreshNativeConfirmCache()
+    {
+        _cachedCombatUi = null;
+        _cachedNativeButton = null;
+
+        var tree = Engine.GetMainLoop() as SceneTree;
+        if (tree?.Root == null)
+            return;
+
+        foreach (var ui in NodeQuery.FindAll<NCombatUi>(tree.Root))
+        {
+            if (!NodeQuery.IsVisible(ui))
+                continue;
+
+            _cachedCombatUi = ui;
+            break;
+        }
+
+        if (_cachedCombatUi != null)
+            _cachedNativeButton = FindBestConfirmButton(_cachedCombatUi);
+
+        if (_cachedNativeButton == null)
+            _cachedNativeButton = FindBestConfirmButton(tree.Root);
+
+        if (_cachedNativeButton != null)
+            ModLogger.Info($"Native confirm cached: '{_cachedNativeButton.Name}'.");
     }
 
     private static void EnsureButton()
@@ -108,7 +179,7 @@ internal static class ConfirmOverlay
             _buttonSize,
             ConfirmBg,
             ConfirmBorder,
-            () => DwellActivationCooldown.TryRunMenuAction(PressConfirm));
+            () => DwellActivationCooldown.TryRunMenuAction(PressConfirmCore));
 
         _layer.AddChild(_button);
         InvalidateStyleCache();
@@ -194,6 +265,11 @@ internal static class ConfirmOverlay
     {
         rect = default;
 
+        // Hand-select screens (draw-pile pick, discard, etc.) — skip full-tree NCard scans; they
+        // were a major FPS sink and the preview anchor is irrelevant there.
+        if (OverlayModeService.GetMode() == OverlayMode.HandSelect)
+            return false;
+
         if (_cachedPreviewAnchor != null
             && NodeQuery.IsLive(_cachedPreviewAnchor)
             && NodeQuery.IsVisible(_cachedPreviewAnchor))
@@ -214,6 +290,19 @@ internal static class ConfirmOverlay
             }
         }
 
+        _framesSincePreviewScan++;
+        if (_cachedPreviewRect.Size.X >= 80f
+            && _cachedPreviewRect.Size.Y >= 100f)
+        {
+            rect = _cachedPreviewRect;
+            return true;
+        }
+
+        if (_previewScanExhausted)
+            return false;
+
+        _previewScanExhausted = true;
+        _framesSincePreviewScan = 0;
         if (!TryScanPreviewCardRect(out rect))
             return false;
 
@@ -273,6 +362,113 @@ internal static class ConfirmOverlay
         _cachedPreviewPos = anchor.GlobalPosition;
     }
 
-    private static void PressConfirm() =>
+    private static void PressConfirmCore()
+    {
+        if (TryActivateNativeConfirm())
+            return;
+
         InputForwardService.PressAcceptKey();
+    }
+
+    private static bool TryActivateNativeConfirm()
+    {
+        if (!TryGetNativeConfirmButton(out var button))
+            return false;
+
+        if (InputForwardService.TryActivateControl(button))
+        {
+            ModLogger.Info($"Confirm via native '{button.Name}'.");
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool NativeContainsPoint(Vector2 globalPos)
+    {
+        if (!TryGetNativeConfirmButton(out var button))
+            return false;
+
+        if (ControlHitboxService.TryGetDwellRect(button, out var rect))
+            return rect.HasPoint(globalPos);
+
+        return button.GetGlobalRect().HasPoint(globalPos);
+    }
+
+    private static bool TryGetNativeConfirmButton(out Control button)
+    {
+        button = null!;
+
+        if (_cachedNativeButton == null || !NodeQuery.IsLive(_cachedNativeButton))
+            return false;
+
+        if (!NodeQuery.IsVisible(_cachedNativeButton))
+            return false;
+
+        if (_cachedNativeButton is NClickableControl { IsEnabled: false })
+            return false;
+
+        button = _cachedNativeButton;
+        return true;
+    }
+
+    private static Control? FindBestConfirmButton(Node root)
+    {
+        Control? best = null;
+        float bestScore = float.MinValue;
+
+        foreach (var candidate in EnumerateConfirmCandidates(root))
+        {
+            float score = ScoreConfirmCandidate(candidate);
+            if (score <= bestScore)
+                continue;
+
+            bestScore = score;
+            best = candidate;
+        }
+
+        return best;
+    }
+
+    private static IEnumerable<Control> EnumerateConfirmCandidates(Node root)
+    {
+        foreach (var confirm in NodeQuery.FindAll<NConfirmButton>(root))
+        {
+            if (confirm is Control control && IsUsableConfirm(control))
+                yield return control;
+        }
+
+        foreach (var confirm in NodeQuery.FindAll<NMiscConfirmButton>(root))
+        {
+            if (confirm is Control control && IsUsableConfirm(control))
+                yield return control;
+        }
+    }
+
+    private static bool IsUsableConfirm(Control control)
+    {
+        if (!NodeQuery.IsLive(control) || !NodeQuery.IsVisible(control))
+            return false;
+
+        if (control is NClickableControl { IsEnabled: false })
+            return false;
+
+        var rect = control.GetGlobalRect();
+        return rect.Size.X >= 8f && rect.Size.Y >= 8f;
+    }
+
+    private static float ScoreConfirmCandidate(Control control)
+    {
+        var rect = control.GetGlobalRect();
+        float score = rect.Size.X * rect.Size.Y;
+        string name = control.Name;
+
+        if (name.Contains("SelectMode", StringComparison.OrdinalIgnoreCase))
+            score += 20000f;
+        else if (name.Contains("Confirm", StringComparison.OrdinalIgnoreCase))
+            score += 10000f;
+
+        score += rect.Position.Y * 0.1f;
+        return score;
+    }
 }

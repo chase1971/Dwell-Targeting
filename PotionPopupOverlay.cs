@@ -16,20 +16,46 @@ internal static class PotionPopupOverlay
     private static CanvasLayer? _layer;
     private static Control? _root;
     private static readonly Dictionary<ulong, PopupSideButton> _sideButtons = new();
+    private static ulong _cachedPopupId;
+    private static NPotionPopup? _cachedPopup;
 
     internal static void Sync()
     {
+        if (_cachedPopup != null && NodeQuery.IsLive(_cachedPopup) && NodeQuery.IsVisible(_cachedPopup))
+        {
+            EnsureCanvas();
+            if (_root != null)
+                _root.Visible = true;
+            return;
+        }
+
+        _cachedPopup = null;
         if (!TryGetVisiblePopup(out var popup))
         {
             Hide();
             return;
         }
 
+        _cachedPopup = popup;
         EnsureCanvas();
         if (_root == null)
             return;
 
         _root.Visible = true;
+
+        ulong popupId = popup.GetInstanceId();
+        if (_cachedPopupId == popupId && _sideButtons.Count > 0)
+            return;
+
+        _cachedPopupId = popupId;
+        RebuildSideButtons(popup);
+    }
+
+    private static void RebuildSideButtons(NPotionPopup popup)
+    {
+        foreach (var side in _sideButtons.Values)
+            side.Dispose();
+        _sideButtons.Clear();
 
         var menuButtons = NodeQuery.FindAll<NPotionPopupButton>(popup)
             .Where(IsEnabledMenuButton)
@@ -37,31 +63,15 @@ internal static class PotionPopupOverlay
             .ThenBy(b => b.GlobalPosition.X)
             .ToList();
 
-        var liveIds = new HashSet<ulong>();
         int slot = 1;
         foreach (var menuButton in menuButtons)
         {
             ulong id = menuButton.GetInstanceId();
-            liveIds.Add(id);
-
-            if (!_sideButtons.TryGetValue(id, out var side))
-            {
-                side = new PopupSideButton(menuButton, _root);
-                _sideButtons[id] = side;
-                ModLogger.Info($"Potion popup side button {slot} for {menuButton.Name}.");
-            }
-
+            var side = new PopupSideButton(menuButton, _root!);
+            _sideButtons[id] = side;
             side.Sync(slot, ButtonSize);
+            ModLogger.Info($"Potion popup side button {slot} for {menuButton.Name}.");
             slot++;
-        }
-
-        foreach (var pair in _sideButtons.ToList())
-        {
-            if (!liveIds.Contains(pair.Key))
-            {
-                pair.Value.Dispose();
-                _sideButtons.Remove(pair.Key);
-            }
         }
     }
 
@@ -76,6 +86,8 @@ internal static class PotionPopupOverlay
         foreach (var side in _sideButtons.Values)
             side.Dispose();
         _sideButtons.Clear();
+        _cachedPopupId = 0;
+        _cachedPopup = null;
 
         if (_root != null && NodeQuery.IsLive(_root))
             _root.Visible = false;

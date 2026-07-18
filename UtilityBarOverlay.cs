@@ -8,25 +8,50 @@ namespace DwellTargeting;
 
 /// <summary>
 /// Dwell-click on native draw/discard/exhaust piles, deck, map, and pause controls (no overlay buttons).
+/// Utility rects are measured once per control when first found — Collect never re-reads layout.
 /// </summary>
 internal static class UtilityBarOverlay
 {
-    private const int RescanIntervalFrames = 20;
+    private const long LookupRescanMs = 500;
 
     private static bool _active;
     private static NCombatUi? _cachedCombatUi;
     private static NTopBar? _cachedTopBar;
-    private static int _framesSinceScan;
+    private static bool _combatUiLookupCached;
+    private static bool _topBarLookupCached;
+    private static long _combatUiLookupTick;
+    private static long _topBarLookupTick;
+    private static readonly Dictionary<string, Rect2> _cachedRects = new();
+    private static readonly Dictionary<string, Control> _cachedControls = new();
+
+    internal static void InvalidateDiscoveryCache()
+    {
+        _combatUiLookupCached = false;
+        _topBarLookupCached = false;
+        _combatUiLookupTick = 0;
+        _topBarLookupTick = 0;
+        _cachedCombatUi = null;
+        _cachedTopBar = null;
+        _cachedRects.Clear();
+        _cachedControls.Clear();
+    }
 
     internal static void Sync(bool visible)
     {
+        bool wasActive = _active;
         _active = visible && RunManager.Instance.IsInProgress;
         if (!_active)
         {
-            _cachedCombatUi = null;
-            _cachedTopBar = null;
-            _framesSinceScan = RescanIntervalFrames;
+            ClearUtilityCache();
+            return;
         }
+
+        if (!wasActive)
+            ClearUtilityCache();
+
+        EnsureTopBarCached();
+        EnsureCombatUiCached();
+        WarmUtilityRects();
     }
 
     internal static void CollectDwellTargets(List<DwellHoverService.Target> targets)
@@ -34,13 +59,16 @@ internal static class UtilityBarOverlay
         if (!_active)
             return;
 
+        var mode = OverlayModeService.GetMode();
         foreach (var id in GetEnabledIds())
         {
-            if (!TryGetNativeControl(id, out var control))
+            if (!ShouldIncludeUtility(id, mode))
                 continue;
 
-            var rect = control.GetGlobalRect();
-            if (rect.Size.X < 8f || rect.Size.Y < 8f)
+            if (!_cachedRects.TryGetValue(id, out var rect))
+                continue;
+
+            if (!_cachedControls.TryGetValue(id, out var control) || !NodeQuery.IsLive(control))
                 continue;
 
             string capturedId = id;
@@ -58,12 +86,16 @@ internal static class UtilityBarOverlay
         if (!_active)
             return false;
 
+        var mode = OverlayModeService.GetMode();
         foreach (var id in GetEnabledIds())
         {
-            if (!TryGetNativeControl(id, out var control))
+            if (!ShouldIncludeUtility(id, mode))
                 continue;
 
-            if (!control.GetGlobalRect().HasPoint(globalPos))
+            if (!_cachedRects.TryGetValue(id, out var rect) || !rect.HasPoint(globalPos))
+                continue;
+
+            if (!_cachedControls.TryGetValue(id, out var control) || !NodeQuery.IsLive(control))
                 continue;
 
             if (!DwellActivationCooldown.TryRunMenuAction(() => ActivateNative(id, control)))
@@ -76,29 +108,58 @@ internal static class UtilityBarOverlay
         return false;
     }
 
+    /// <summary>Screen rect for a native top-bar / pile control (map, deck, menu, etc.).</summary>
+    internal static bool TryGetAnchorRect(string id, out Rect2 rect)
+    {
+        rect = default;
+        return _cachedRects.TryGetValue(id, out rect) && rect.Size.X >= 8f && rect.Size.Y >= 8f;
+    }
+
     internal static bool ContainsPoint(Vector2 globalPos)
     {
         if (!_active)
             return false;
 
+        var mode = OverlayModeService.GetMode();
         foreach (var id in GetEnabledIds())
         {
-            if (!TryGetNativeControl(id, out var control))
+            if (!ShouldIncludeUtility(id, mode))
                 continue;
 
-            if (control.GetGlobalRect().HasPoint(globalPos))
+            if (_cachedRects.TryGetValue(id, out var rect) && rect.HasPoint(globalPos))
                 return true;
         }
 
         return false;
     }
 
+    /// <summary>
+    /// Draw/discard/exhaust piles are combat-only. Deck, map, and pause menu stay available on
+    /// events, shops, rest sites, rewards, etc. (v0.10.58 accidentally blocked all utilities on
+    /// those screens).
+    /// </summary>
+    private static bool ShouldIncludeUtility(string id, OverlayMode mode)
+    {
+        if (mode == OverlayMode.None)
+            return false;
+
+        if (id is "draw" or "discard" or "exhaust")
+            return mode is OverlayMode.CombatPlay or OverlayMode.HandSelect;
+
+        return true;
+    }
+
     internal static void Hide()
     {
         _active = false;
-        _cachedCombatUi = null;
-        _cachedTopBar = null;
-        _framesSinceScan = RescanIntervalFrames;
+        ClearUtilityCache();
+    }
+
+    private static void ClearUtilityCache()
+    {
+        InvalidateDiscoveryCache();
+        _cachedRects.Clear();
+        _cachedControls.Clear();
     }
 
     private static IEnumerable<string> GetEnabledIds()
@@ -118,31 +179,50 @@ internal static class UtilityBarOverlay
             yield return "menu";
     }
 
-    private static void RefreshCacheIfNeeded()
+    private static void WarmUtilityRects()
     {
-        _framesSinceScan++;
-        if (_framesSinceScan < RescanIntervalFrames
-            && _cachedTopBar != null
-            && NodeQuery.IsLive(_cachedTopBar))
+        foreach (var id in GetEnabledIds())
         {
-            return;
-        }
+            if (_cachedControls.TryGetValue(id, out var existing)
+                && NodeQuery.IsLive(existing)
+                && _cachedRects.ContainsKey(id))
+            {
+                continue;
+            }
 
-        _framesSinceScan = 0;
-        _cachedCombatUi = null;
-        _cachedTopBar = null;
+            _cachedRects.Remove(id);
+            _cachedControls.Remove(id);
 
-        var tree = Engine.GetMainLoop() as SceneTree;
-        if (tree?.Root == null)
-            return;
-
-        foreach (var ui in NodeQuery.FindAll<NCombatUi>(tree.Root))
-        {
-            if (!NodeQuery.IsVisible(ui))
+            if (!TryGetNativeControl(id, out var control))
                 continue;
 
-            _cachedCombatUi = ui;
-            break;
+            var rect = control.GetGlobalRect();
+            if (rect.Size.X < 8f || rect.Size.Y < 8f)
+                continue;
+
+            rect = rect.Grow(6f);
+
+            _cachedControls[id] = control;
+            _cachedRects[id] = rect;
+        }
+    }
+
+    private static void EnsureTopBarCached()
+    {
+        if (_cachedTopBar != null && NodeQuery.IsLive(_cachedTopBar))
+            return;
+
+        long now = System.Environment.TickCount64;
+        if (_topBarLookupCached && now - _topBarLookupTick < LookupRescanMs)
+            return;
+
+        _cachedTopBar = null;
+        var tree = Engine.GetMainLoop() as SceneTree;
+        if (tree?.Root == null)
+        {
+            _topBarLookupCached = true;
+            _topBarLookupTick = now;
+            return;
         }
 
         foreach (var bar in NodeQuery.FindAll<NTopBar>(tree.Root))
@@ -151,14 +231,53 @@ internal static class UtilityBarOverlay
                 continue;
 
             _cachedTopBar = bar;
+            ModLogger.Info("Utility bar: cached NTopBar for run.");
             break;
         }
+
+        _topBarLookupCached = true;
+        _topBarLookupTick = now;
+    }
+
+    private static void EnsureCombatUiCached()
+    {
+        if (_cachedCombatUi != null && NodeQuery.IsLive(_cachedCombatUi))
+            return;
+
+        long now = System.Environment.TickCount64;
+        if (_combatUiLookupCached && now - _combatUiLookupTick < LookupRescanMs)
+            return;
+
+        _cachedCombatUi = null;
+        var tree = Engine.GetMainLoop() as SceneTree;
+        if (tree?.Root == null)
+        {
+            _combatUiLookupCached = true;
+            _combatUiLookupTick = now;
+            return;
+        }
+
+        foreach (var ui in NodeQuery.FindAll<NCombatUi>(tree.Root))
+        {
+            if (!NodeQuery.IsVisible(ui))
+                continue;
+
+            _cachedCombatUi = ui;
+            ModLogger.Info("Utility bar: cached NCombatUi for combat.");
+            break;
+        }
+
+        _combatUiLookupCached = true;
+        _combatUiLookupTick = now;
     }
 
     private static bool TryGetNativeControl(string id, out Control control)
     {
         control = null!;
-        RefreshCacheIfNeeded();
+        if (id is "draw" or "discard" or "exhaust")
+            EnsureCombatUiCached();
+        else
+            EnsureTopBarCached();
 
         Control? found = id switch
         {
@@ -184,6 +303,9 @@ internal static class UtilityBarOverlay
     private static void ActivateNative(string id, Control control)
     {
         ModLogger.Info($"Native utility '{id}' -> {control.Name}");
+        if (id is "deck" or "draw" or "discard" or "exhaust")
+            ViewScreenQuery.RequestScan();
+
         if (control is NClickableControl clickable)
         {
             clickable.ForceClick();

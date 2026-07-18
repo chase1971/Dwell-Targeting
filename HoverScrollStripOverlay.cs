@@ -12,8 +12,6 @@ internal static class HoverScrollStripOverlay
     private const int ArrowSize = 70;
     private const int ArrowGap = 18;
     private const float DefaultLeftMargin = 130f;
-    private const int ScrollIntervalFrames = 3;
-
     private static CanvasLayer? _layer;
     private static Control? _root;
     private static Button? _upArrow;
@@ -67,7 +65,7 @@ internal static class HoverScrollStripOverlay
         }
 
         _scrollFrameCounter++;
-        if (_scrollFrameCounter % ScrollIntervalFrames != 0)
+        if (_scrollFrameCounter % 2 != 0)
             return;
 
         MapScrollService.Scroll(overUp);

@@ -76,6 +76,48 @@ internal static class RewardsScreenQuery
             .FirstOrDefault(IsLiveChoice);
     }
 
+    internal static Control? GetSkipOrProceedControl(NRewardsScreen screen)
+    {
+        if (!NodeQuery.IsLive(screen))
+            return null;
+
+        if (GetProceedButton(screen) is Control proceed)
+            return proceed;
+
+        return FindSkipControl(screen);
+    }
+
+    private static Control? FindSkipControl(NRewardsScreen screen)
+    {
+        foreach (var proceed in NodeQuery.FindAll<NProceedButton>(screen))
+        {
+            if (IsLiveChoice(proceed))
+                return proceed;
+        }
+
+        foreach (var control in NodeQuery.FindAll<Control>(screen))
+        {
+            if (!IsLiveChoice(control))
+                continue;
+
+            string typeName = control.GetType().Name;
+            if (typeName is "NCardRewardAlternativeButton" or "NChoiceSelectionSkipButton")
+                return control;
+
+            if (control is Button button)
+            {
+                string text = button.Text?.Trim() ?? string.Empty;
+                if (text.Equals("Skip", StringComparison.OrdinalIgnoreCase)
+                    || text.Equals("Proceed", StringComparison.OrdinalIgnoreCase))
+                {
+                    return control;
+                }
+            }
+        }
+
+        return null;
+    }
+
     private static bool TryReadRewardList(NRewardsScreen screen, out List<NRewardButton> rewards)
     {
         rewards = new List<NRewardButton>();

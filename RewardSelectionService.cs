@@ -22,17 +22,22 @@ internal static class RewardSelectionService
         }
 
         if (TryActivateButton(button))
+        {
+            OverlayModeService.InvalidateCache();
             return;
+        }
 
         try
         {
             screen.RewardCollectedFrom(button);
             ModLogger.Info($"RewardCollectedFrom '{button.Name}'.");
+            OverlayModeService.InvalidateCache();
         }
         catch (Exception ex)
         {
             ModLogger.Warn($"RewardCollectedFrom failed: {ex.Message}");
             InputForwardService.TryActivateControl(button);
+            OverlayModeService.InvalidateCache();
         }
     }
 
@@ -41,6 +46,7 @@ internal static class RewardSelectionService
         // Proceed / Skip responds to the E accept key (ForceClick does not reliably advance it).
         InputForwardService.PressAcceptKey();
         ModLogger.Info("Proceed via E accept key.");
+        OverlayModeService.InvalidateCache();
     }
 
     private static bool TryActivateButton(Control button)

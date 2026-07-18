@@ -7,32 +7,20 @@ namespace DwellTargeting;
 /// <summary>
 /// Universal hover-to-activate for the game's Back button (<see cref="NBackButton"/>), which appears
 /// on many screens (card / deck / pile views, upgrade &amp; removal screens, shops, chests) and was
-/// never wired. We scan (throttled) for a visible+enabled back button and offer it as a dwell target
-/// regardless of mode, so any screen with a Back arrow can be dismissed hands-free.
+/// never wired. Found once when it first appears; refound only if it disappears.
 /// </summary>
 internal static class BackButtonOverlay
 {
-    private const int RescanIntervalFrames = 10;
+    private const float BackButtonPadding = 10f;
 
     private static Control? _backButton;
-    private static int _framesSinceScan;
-    private static long _nextDiagTick;
 
     internal static void Sync()
     {
-        _framesSinceScan++;
-        if (_framesSinceScan < RescanIntervalFrames)
+        if (_backButton != null && NodeQuery.IsLive(_backButton) && NodeQuery.IsVisible(_backButton))
             return;
 
-        _framesSinceScan = 0;
         _backButton = FindBackButton();
-
-        long now = System.Environment.TickCount64;
-        if (_backButton != null && now >= _nextDiagTick)
-        {
-            _nextDiagTick = now + 2000;
-            ModLogger.Info($"[Back] visible back button '{_backButton.Name}'.");
-        }
     }
 
     internal static void CollectDwellTargets(List<DwellHoverService.Target> targets)
@@ -40,8 +28,11 @@ internal static class BackButtonOverlay
         if (_backButton == null || !NodeQuery.IsLive(_backButton) || !NodeQuery.IsVisible(_backButton))
             return;
 
-        if (!ControlHitboxService.TryGetDwellRect(_backButton, out var rect))
+        var rect = _backButton.GetGlobalRect();
+        if (rect.Size.X < 8f || rect.Size.Y < 8f)
             return;
+
+        rect = rect.Grow(BackButtonPadding);
 
         var captured = _backButton;
         targets.Add(DwellHoverService.Menu(rect, () => Activate(captured), "BackButton"));
@@ -50,13 +41,15 @@ internal static class BackButtonOverlay
     internal static void Hide()
     {
         _backButton = null;
-        _framesSinceScan = 0;
     }
 
     private static void Activate(Control button)
     {
         if (!NodeQuery.IsLive(button))
             return;
+
+        ViewScreenQuery.Invalidate();
+        DeckViewOverlay.NotifyClosed();
 
         if (InputForwardService.TryActivateControl(button))
             ModLogger.Info($"Back button '{button.Name}' activated.");

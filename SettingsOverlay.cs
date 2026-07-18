@@ -18,6 +18,7 @@ internal static class SettingsOverlay
     private static Button? _closeButton;
     private static Label? _cardDwellValueLabel;
     private static Label? _endTurnDwellValueLabel;
+    private static Label? _menuDwellValueLabel;
 
     private static Rect2 _gearBounds;
     private static Rect2 _hideEndTurnBounds;
@@ -26,6 +27,8 @@ internal static class SettingsOverlay
     private static Rect2 _cardDwellPlusBounds;
     private static Rect2 _endTurnDwellMinusBounds;
     private static Rect2 _endTurnDwellPlusBounds;
+    private static Rect2 _menuDwellMinusBounds;
+    private static Rect2 _menuDwellPlusBounds;
 
     private static bool _open;
     private static bool _initialized;
@@ -275,6 +278,12 @@ internal static class SettingsOverlay
         SyncFromStore();
     }
 
+    private static void AdjustMenuDwell(float delta)
+    {
+        SettingsStore.ApplyMenuDwellSeconds(SettingsStore.Current.MenuDwellSeconds + delta);
+        SyncFromStore();
+    }
+
     private static void SyncFromStore()
     {
         if (_hideEndTurnToggle != null && NodeQuery.IsLive(_hideEndTurnToggle))
@@ -285,6 +294,9 @@ internal static class SettingsOverlay
 
         if (_endTurnDwellValueLabel != null && NodeQuery.IsLive(_endTurnDwellValueLabel))
             _endTurnDwellValueLabel.Text = $"{SettingsStore.GetEndTurnDwellSeconds():F2}s";
+
+        if (_menuDwellValueLabel != null && NodeQuery.IsLive(_menuDwellValueLabel))
+            _menuDwellValueLabel.Text = $"{SettingsStore.GetMenuDwellSeconds():F2}s";
     }
 
     private static void SyncVisibility()
@@ -322,6 +334,8 @@ internal static class SettingsOverlay
         _cardDwellPlusBounds = default;
         _endTurnDwellMinusBounds = default;
         _endTurnDwellPlusBounds = default;
+        _menuDwellMinusBounds = default;
+        _menuDwellPlusBounds = default;
 
         if (_panel == null || !NodeQuery.IsLive(_panel) || !_panel.Visible)
             return;
@@ -344,6 +358,12 @@ internal static class SettingsOverlay
                     break;
                 case "EndTurnDwellPlus":
                     _endTurnDwellPlusBounds = button.GetGlobalRect();
+                    break;
+                case "MenuDwellMinus":
+                    _menuDwellMinusBounds = button.GetGlobalRect();
+                    break;
+                case "MenuDwellPlus":
+                    _menuDwellPlusBounds = button.GetGlobalRect();
                     break;
             }
         }
@@ -381,6 +401,22 @@ internal static class SettingsOverlay
                 _endTurnDwellPlusBounds,
                 () => AdjustEndTurnDwell(0.05f),
                 "SettingsEndTurnDwellPlus"));
+        }
+
+        if (_menuDwellMinusBounds.Size.X >= 1)
+        {
+            targets.Add(DwellHoverService.Menu(
+                _menuDwellMinusBounds,
+                () => AdjustMenuDwell(-0.05f),
+                "SettingsMenuDwellMinus"));
+        }
+
+        if (_menuDwellPlusBounds.Size.X >= 1)
+        {
+            targets.Add(DwellHoverService.Menu(
+                _menuDwellPlusBounds,
+                () => AdjustMenuDwell(0.05f),
+                "SettingsMenuDwellPlus"));
         }
     }
 
@@ -421,6 +457,24 @@ internal static class SettingsOverlay
                 return false;
 
             message = "End Turn dwell plus";
+            return true;
+        }
+
+        if (_menuDwellMinusBounds.Size.X >= 1 && _menuDwellMinusBounds.HasPoint(globalPos))
+        {
+            if (!DwellActivationCooldown.TryRunMenuAction(() => AdjustMenuDwell(-0.05f)))
+                return false;
+
+            message = "Menu dwell minus";
+            return true;
+        }
+
+        if (_menuDwellPlusBounds.Size.X >= 1 && _menuDwellPlusBounds.HasPoint(globalPos))
+        {
+            if (!DwellActivationCooldown.TryRunMenuAction(() => AdjustMenuDwell(0.05f)))
+                return false;
+
+            message = "Menu dwell plus";
             return true;
         }
 
@@ -496,9 +550,16 @@ internal static class SettingsOverlay
             () => AdjustEndTurnDwell(0.05f),
             out _endTurnDwellValueLabel));
 
+        root.AddChild(CreateDwellAdjustRow(
+            "Menu & utility hover time",
+            "MenuDwell",
+            () => AdjustMenuDwell(-0.05f),
+            () => AdjustMenuDwell(0.05f),
+            out _menuDwellValueLabel));
+
         _hideEndTurnToggle = new CheckBox
         {
-            Text = "Hide End Turn button during combat",
+            Text = "Hide center End Turn overlay (native button dwell still works)",
             CustomMinimumSize = new Vector2(PanelWidth - 48, 64),
             FocusMode = Control.FocusModeEnum.None
         };

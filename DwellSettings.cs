@@ -19,12 +19,23 @@ internal sealed class DwellSettings
     public const float MaxDwellSeconds = 3f;
     public const float DefaultCardDwellSeconds = 0.5f;
     public const float DefaultEndTurnDwellSeconds = 1.15f;
+    public const float DefaultMenuDwellSeconds = 0.9f;
+
+    public const int MinTreeScanIntervalFrames = 10;
+    public const int MaxTreeScanIntervalFrames = 120;
+    public const int DefaultTreeScanIntervalFrames = 45;
 
     [JsonPropertyName("cardDwellSeconds")]
     public float CardDwellSeconds { get; set; } = DefaultCardDwellSeconds;
 
     [JsonPropertyName("endTurnDwellSeconds")]
     public float EndTurnDwellSeconds { get; set; } = DefaultEndTurnDwellSeconds;
+
+    [JsonPropertyName("menuDwellSeconds")]
+    public float MenuDwellSeconds { get; set; } = DefaultMenuDwellSeconds;
+
+    [JsonPropertyName("treeScanIntervalFrames")]
+    public int TreeScanIntervalFrames { get; set; } = DefaultTreeScanIntervalFrames;
 
     [JsonPropertyName("hideEndTurnButton")]
     public bool HideEndTurnButton { get; set; }
@@ -73,4 +84,8 @@ internal sealed class DwellSettings
 
     [JsonPropertyName("showHitboxOverlay")]
     public bool ShowHitboxOverlay { get; set; }
+
+    [JsonPropertyName("showOverlays")]
+    /// <summary>In-game ON/OFF toggle beside map: hide drawn overlay visuals; dwell stays active.</summary>
+    public bool ShowOverlays { get; set; } = true;
 }

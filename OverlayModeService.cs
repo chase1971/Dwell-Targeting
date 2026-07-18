@@ -26,12 +26,12 @@ internal enum OverlayMode
 
 internal static class OverlayModeService
 {
-    private const int CacheTtlMs = 150;
+    private const long ModeRescanIntervalMs = 250;
 
     private static OverlayMode _cachedMode = OverlayMode.None;
     private static ulong _cachedFrame;
-    private static long _cachedTick;
     private static int _cachedInvalidationKey = int.MinValue;
+    private static long _lastScanTick;
     private static NRewardsScreen? _cachedRewardsScreen;
     private static Node? _cachedPileSelectScreen;
     private static NMapScreen? _cachedMapScreen;
@@ -47,13 +47,21 @@ internal static class OverlayModeService
 
         int key = ComputeInvalidationKey();
         long now = System.Environment.TickCount64;
-        if (key == _cachedInvalidationKey && now - _cachedTick < CacheTtlMs)
+        if (key == _cachedInvalidationKey)
         {
+            if (!CombatManager.Instance.IsInProgress && now - _lastScanTick >= ModeRescanIntervalMs)
+            {
+                RefreshMode(key, frame);
+                ViewScreenQuery.Invalidate();
+                return _cachedMode;
+            }
+
             _cachedFrame = frame;
             return _cachedMode;
         }
 
-        RefreshMode(key, frame, now);
+        RefreshMode(key, frame);
+        ViewScreenQuery.Invalidate();
         return _cachedMode;
     }
 
@@ -131,6 +139,7 @@ internal static class OverlayModeService
     {
         _cachedInvalidationKey = int.MinValue;
         _cachedFrame = 0;
+        _lastScanTick = 0;
         _cachedRewardsScreen = null;
         _cachedPileSelectScreen = null;
         _cachedMapScreen = null;
@@ -161,11 +170,11 @@ internal static class OverlayModeService
         return key;
     }
 
-    private static void RefreshMode(int key, ulong frame, long now)
+    private static void RefreshMode(int key, ulong frame)
     {
+        _lastScanTick = System.Environment.TickCount64;
         _cachedInvalidationKey = key;
         _cachedFrame = frame;
-        _cachedTick = now;
         _cachedRewardsScreen = null;
         _cachedPileSelectScreen = null;
         _cachedMapScreen = null;
@@ -299,12 +308,22 @@ internal static class OverlayModeService
         }
     }
 
-    private static bool IsPileSelectScreen(Node node) =>
-        node is NCombatPileCardSelectScreen
+    private static bool IsPileSelectScreen(Node node)
+    {
+        if (node is NCombatPileCardSelectScreen
             or NChooseACardSelectionScreen
             or NCardGridSelectionScreen
             or NSimpleCardSelectScreen
-            or NCardRewardSelectionScreen;
+            or NCardRewardSelectionScreen)
+        {
+            return true;
+        }
+
+        string typeName = node.GetType().Name;
+        return typeName.Contains("CardSelection", StringComparison.Ordinal)
+            || typeName.Contains("ChooseACard", StringComparison.Ordinal)
+            || typeName.Contains("CardReward", StringComparison.Ordinal);
+    }
 
     private static bool TryCaptureShopNode(Node node)
     {

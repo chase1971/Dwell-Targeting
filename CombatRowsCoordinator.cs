@@ -14,7 +14,7 @@ namespace DwellTargeting;
 /// </summary>
 internal static class CombatRowsCoordinator
 {
-    private const int GapAboveCard = 28;
+    private const int GapAboveCard = CardButtonRow.DefaultGapAboveCard;
     private const float HandBlockPadding = 24f;
 
     private static readonly Dictionary<ulong, CardButtonRow> _rows = new();
@@ -38,6 +38,13 @@ internal static class CombatRowsCoordinator
 
         int handSize = holders.Count(h => h.CardModel != null && NodeQuery.IsVisible(h));
         int buttonSize = SettingsStore.GetCardButtonSize(handSize);
+
+        var visibleHolders = holders
+            .Where(h => h.CardModel != null && NodeQuery.IsVisible(h))
+            .ToList();
+        var slotIndexFromRight = new Dictionary<ulong, int>(visibleHolders.Count);
+        for (int i = 0; i < visibleHolders.Count; i++)
+            slotIndexFromRight[visibleHolders[i].GetInstanceId()] = visibleHolders.Count - 1 - i;
 
         long boundsStart = OverlayPerfDiagnostics.BeginTick();
         Rect2 handBounds = ComputeHandBounds(holders);
@@ -63,7 +70,9 @@ internal static class CombatRowsCoordinator
                 ModLogger.Info($"Button row for {card.Id.Entry} holder={id} parented={(holder is Control)}");
             }
 
-            row.SyncPlay(card, enemyCount, holder, buttonSize);
+            int fromRight = slotIndexFromRight.TryGetValue(id, out int idxFromRight) ? idxFromRight : int.MaxValue;
+            int gapAboveCard = CardButtonRow.ResolveGapAboveCard(handSize, fromRight);
+            row.SyncPlay(card, enemyCount, holder, buttonSize, gapAboveCard);
         }
 
         _handBlockBounds = handBounds;
@@ -76,41 +85,6 @@ internal static class CombatRowsCoordinator
         else
             EnemyLabelOverlay.Hide();
         OverlayPerfDiagnostics.Add("combat.labels", labelStart);
-    }
-
-    /// <summary>Build / refresh the hand-select rows (single numbered Select button per card).</summary>
-    internal static void SyncHandSelect(NPlayerHand hand, Control? fallbackRoot)
-    {
-        var holders = GetPlayModeHolders(hand);
-        HandLayoutDiagnostics.MaybeLog(hand, holders);
-
-        int handSize = holders.Count(h => h.CardModel != null && NodeQuery.IsVisible(h));
-        int buttonSize = SettingsStore.GetCardButtonSize(handSize);
-
-        var liveIds = new HashSet<ulong>();
-        int slot = 1;
-        foreach (var holder in holders)
-        {
-            var card = holder.CardModel;
-            if (card == null || !NodeQuery.IsVisible(holder))
-                continue;
-
-            ulong id = holder.GetInstanceId();
-            liveIds.Add(id);
-
-            if (!_rows.TryGetValue(id, out var row))
-            {
-                row = new CardButtonRow(holder, fallbackRoot);
-                _rows[id] = row;
-                ModLogger.Info($"Select row for {card.Id.Entry} holder={id}");
-            }
-
-            row.SyncSelect(slot, holder, buttonSize);
-            slot++;
-        }
-
-        _handBlockBounds = default;
-        RemoveStaleRows(liveIds);
     }
 
     /// <summary>Add every live row's dwell targets to the frame's target list.</summary>

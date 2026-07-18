@@ -72,6 +72,12 @@ internal static class SettingsStore
     internal static float GetEndTurnDwellSeconds() =>
         Math.Clamp(_current.EndTurnDwellSeconds, DwellSettings.MinDwellSeconds, DwellSettings.MaxDwellSeconds);
 
+    internal static float GetMenuDwellSeconds() =>
+        Math.Clamp(_current.MenuDwellSeconds, DwellSettings.MinDwellSeconds, DwellSettings.MaxDwellSeconds);
+
+    internal static int GetTreeScanIntervalFrames() =>
+        Math.Clamp(_current.TreeScanIntervalFrames, DwellSettings.MinTreeScanIntervalFrames, DwellSettings.MaxTreeScanIntervalFrames);
+
     internal static void SetHideEndTurnButton(bool value) =>
         ApplyHideEndTurnButton(value, persist: true, syncModConfig: true);
 
@@ -95,6 +101,12 @@ internal static class SettingsStore
 
     internal static void ApplyEndTurnDwellSeconds(float value, bool persist = true, bool syncModConfig = true) =>
         ApplyFloat(v => _current.EndTurnDwellSeconds = v, _current.EndTurnDwellSeconds, value, DwellSettings.MinDwellSeconds, DwellSettings.MaxDwellSeconds, "endTurnDwellSeconds", persist, syncModConfig);
+
+    internal static void ApplyMenuDwellSeconds(float value, bool persist = true, bool syncModConfig = true) =>
+        ApplyFloat(v => _current.MenuDwellSeconds = v, _current.MenuDwellSeconds, value, DwellSettings.MinDwellSeconds, DwellSettings.MaxDwellSeconds, "menuDwellSeconds", persist, syncModConfig);
+
+    internal static void ApplyTreeScanIntervalFrames(float value, bool persist = true, bool syncModConfig = true) =>
+        ApplyInt(v => _current.TreeScanIntervalFrames = v, _current.TreeScanIntervalFrames, (int)Math.Round(value), DwellSettings.MinTreeScanIntervalFrames, DwellSettings.MaxTreeScanIntervalFrames, "treeScanIntervalFrames", persist, syncModConfig);
 
     internal static void ApplyCardButtonOpacity(float value, bool persist = true, bool syncModConfig = true) =>
         ApplyFloat(v => _current.CardButtonOpacity = v, _current.CardButtonOpacity, value, DwellSettings.MinOpacity, DwellSettings.MaxOpacity, "cardButtonOpacity", persist, syncModConfig);
@@ -128,6 +140,15 @@ internal static class SettingsStore
 
     internal static void ApplyShowHitboxOverlay(bool value, bool persist = true, bool syncModConfig = true) =>
         ApplyBool(v => _current.ShowHitboxOverlay = v, _current.ShowHitboxOverlay, value, "showHitboxOverlay", persist, syncModConfig);
+
+    internal static void ApplyShowOverlays(bool value, bool persist = true, bool syncModConfig = true) =>
+        ApplyBool(v => _current.ShowOverlays = v, _current.ShowOverlays, value, "showOverlays", persist, syncModConfig);
+
+    /// <summary>Drawn overlay buttons/labels. Dwell keeps working when false.</summary>
+    internal static bool AreOverlayVisualsVisible() => _current.ShowOverlays;
+
+    /// <summary>Green debug hitboxes — only while overlay visuals are shown.</summary>
+    internal static bool ShouldDrawHitboxDebug() => _current.ShowOverlays && _current.ShowHitboxOverlay;
 
     internal static void RestoreDefaults()
     {
@@ -184,6 +205,31 @@ internal static class SettingsStore
         ModLogger.Info($"{key}={value:F2}");
     }
 
+    private static void ApplyInt(
+        Action<int> setter,
+        int current,
+        int value,
+        int min,
+        int max,
+        string key,
+        bool persist,
+        bool syncModConfig)
+    {
+        value = Math.Clamp(value, min, max);
+        if (current == value)
+            return;
+
+        setter(value);
+
+        if (persist)
+            Save();
+
+        if (syncModConfig && ModConfigBridge.IsRegistered)
+            ModConfigBridge.SetValue(key, value);
+
+        ModLogger.Info($"{key}={value}");
+    }
+
     private static int ScaleCardSize(int baseSize, float scale)
     {
         float clamped = Math.Clamp(scale, DwellSettings.CardMinScale, DwellSettings.CardMaxScale);
@@ -205,6 +251,8 @@ internal static class SettingsStore
         _current.MenuButtonOpacity = Math.Clamp(_current.MenuButtonOpacity, DwellSettings.MinOpacity, DwellSettings.MaxOpacity);
         _current.CardDwellSeconds = Math.Clamp(_current.CardDwellSeconds, DwellSettings.MinDwellSeconds, DwellSettings.MaxDwellSeconds);
         _current.EndTurnDwellSeconds = Math.Clamp(_current.EndTurnDwellSeconds, DwellSettings.MinDwellSeconds, DwellSettings.MaxDwellSeconds);
+        _current.MenuDwellSeconds = Math.Clamp(_current.MenuDwellSeconds, DwellSettings.MinDwellSeconds, DwellSettings.MaxDwellSeconds);
+        _current.TreeScanIntervalFrames = Math.Clamp(_current.TreeScanIntervalFrames, DwellSettings.MinTreeScanIntervalFrames, DwellSettings.MaxTreeScanIntervalFrames);
     }
 
     private static void Reload(bool force)

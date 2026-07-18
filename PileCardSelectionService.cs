@@ -1,4 +1,6 @@
 using System.Reflection;
+using Godot;
+using MegaCrit.Sts2.Core.Nodes.Cards;
 using MegaCrit.Sts2.Core.Nodes.Cards.Holders;
 
 namespace DwellTargeting;
@@ -12,6 +14,33 @@ internal static class PileCardSelectionService
     /// <c>Pressed</c> signal (NClickableControl on the hitbox has no Pressed signal and ForceClick on it
     /// does not drive the holder's press/release pair), so we emit the holder's Pressed signal directly.
     /// </summary>
+    internal static void TrySelectCardControl(Control cardControl, int slotOneBased)
+    {
+        if (!NodeQuery.IsLive(cardControl))
+        {
+            ModLogger.Warn($"Pile select slot {slotOneBased}: card control not live.");
+            return;
+        }
+
+        for (Node? node = cardControl; node != null; node = node.GetParent())
+        {
+            if (node is NCardHolder holder)
+            {
+                TrySelect(holder, slotOneBased);
+                return;
+            }
+        }
+
+        if (InputForwardService.TryActivateControl(cardControl))
+        {
+            ModLogger.Info($"Pile select slot {slotOneBased} via card control click.");
+            PileSelectOverlay.NotifyPickCompleted();
+            OverlayModeService.InvalidateCache();
+        }
+        else
+            ModLogger.Warn($"Pile select slot {slotOneBased}: card control activation failed.");
+    }
+
     internal static void TrySelect(NCardHolder holder, int slotOneBased)
     {
         if (!NodeQuery.IsLive(holder))
@@ -24,6 +53,8 @@ internal static class PileCardSelectionService
         {
             holder.EmitSignal("Pressed", holder);
             ModLogger.Info($"Pile select slot {slotOneBased} via holder Pressed signal.");
+            PileSelectOverlay.NotifyPickCompleted();
+            OverlayModeService.InvalidateCache();
             return;
         }
         catch (Exception ex)
@@ -40,6 +71,8 @@ internal static class PileCardSelectionService
             {
                 _emitPressed.Invoke(holder, null);
                 ModLogger.Info($"Pile select slot {slotOneBased} via EmitPressed().");
+                PileSelectOverlay.NotifyPickCompleted();
+                OverlayModeService.InvalidateCache();
             }
             else
             {

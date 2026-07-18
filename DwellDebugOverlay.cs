@@ -4,7 +4,8 @@ namespace DwellTargeting;
 
 /// <summary>
 /// Debug visualization that draws the live dwell target rectangles (plus their names) on screen so hitbox
-/// alignment can be verified against the actual cards/buttons. Toggle via ModConfig "Show Hitbox Outlines".
+/// alignment can be verified against the actual cards/buttons. Requires ModConfig "Show Hitbox Outlines"
+/// and overlay visuals ON (map toggle).
 /// Pools <see cref="Panel"/> outlines + <see cref="Label"/>s; nothing is interactive (mouse-filter Ignore).
 /// </summary>
 internal static class DwellDebugOverlay
@@ -21,7 +22,7 @@ internal static class DwellDebugOverlay
 
     internal static void Render(IReadOnlyList<DwellHoverService.Target> targets)
     {
-        if (!SettingsStore.Current.ShowHitboxOverlay || targets.Count == 0)
+        if (!SettingsStore.ShouldDrawHitboxDebug() || targets.Count == 0)
         {
             Hide();
             return;

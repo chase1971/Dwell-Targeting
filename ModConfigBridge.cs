@@ -63,6 +63,8 @@ internal static class ModConfigBridge
         ApplyFromModConfig("hideConfirmButton", s.HideConfirmButton, v => SettingsStore.ApplyHideConfirmButton(v, persist: false, syncModConfig: false));
         ApplyFromModConfig("cardDwellSeconds", s.CardDwellSeconds, v => SettingsStore.ApplyCardDwellSeconds(v, persist: false, syncModConfig: false));
         ApplyFromModConfig("endTurnDwellSeconds", s.EndTurnDwellSeconds, v => SettingsStore.ApplyEndTurnDwellSeconds(v, persist: false, syncModConfig: false));
+        ApplyFromModConfig("menuDwellSeconds", s.MenuDwellSeconds, v => SettingsStore.ApplyMenuDwellSeconds(v, persist: false, syncModConfig: false));
+        ApplyFromModConfig("treeScanIntervalFrames", s.TreeScanIntervalFrames, v => SettingsStore.ApplyTreeScanIntervalFrames(v, persist: false, syncModConfig: false));
         ApplyFromModConfig("cardButtonScale", s.CardButtonScale, v => SettingsStore.ApplyCardButtonScale(v, persist: false, syncModConfig: false));
         ApplyFromModConfig("actionButtonScale", s.ActionButtonScale, v => SettingsStore.ApplyActionButtonScale(v, persist: false, syncModConfig: false));
         ApplyFromModConfig("cardButtonOpacity", s.CardButtonOpacity, v => SettingsStore.ApplyCardButtonOpacity(v, persist: false, syncModConfig: false));

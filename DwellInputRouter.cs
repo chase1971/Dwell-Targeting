@@ -43,6 +43,13 @@ internal partial class DwellInputRouter : Node
 
         if (mode == OverlayMode.Rewards)
         {
+            if (allowPlay && OverlayVisToggle.TryRouteClick(mouseButton.GlobalPosition, out string visMessage))
+            {
+                ModLogger.Info(visMessage);
+                viewport.SetInputAsHandled();
+                return;
+            }
+
             if (allowPlay && RewardsOverlay.TryRouteClick(mouseButton.GlobalPosition, out string rewardMessage))
             {
                 ModLogger.Info(rewardMessage);
@@ -54,6 +61,13 @@ internal partial class DwellInputRouter : Node
 
         if (mode == OverlayMode.PileSelect)
         {
+            if (allowPlay && OverlayVisToggle.TryRouteClick(mouseButton.GlobalPosition, out string visMessage))
+            {
+                ModLogger.Info(visMessage);
+                viewport.SetInputAsHandled();
+                return;
+            }
+
             if (allowPlay && PileSelectOverlay.TryRouteClick(mouseButton.GlobalPosition, out string pileMessage))
             {
                 ModLogger.Info(pileMessage);
@@ -65,6 +79,13 @@ internal partial class DwellInputRouter : Node
 
         if (mode == OverlayMode.Shop)
         {
+            if (allowPlay && OverlayVisToggle.TryRouteClick(mouseButton.GlobalPosition, out string visMessage))
+            {
+                ModLogger.Info(visMessage);
+                viewport.SetInputAsHandled();
+                return;
+            }
+
             if (allowPlay && ShopOverlay.TryRouteClick(mouseButton.GlobalPosition, out string shopMessage))
             {
                 ModLogger.Info(shopMessage);

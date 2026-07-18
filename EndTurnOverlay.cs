@@ -2,12 +2,14 @@ using Godot;
 using MegaCrit.Sts2.Core.Combat;
 using MegaCrit.Sts2.Core.Context;
 using MegaCrit.Sts2.Core.Nodes.Combat;
+using MegaCrit.Sts2.Core.Nodes.GodotExtensions;
 using MegaCrit.Sts2.Core.Runs;
 
 namespace DwellTargeting;
 
 /// <summary>
-/// Large dwell-friendly End Turn button centered above the hand (open floor area).
+/// Large dwell-friendly End Turn button centered above the hand (open floor area),
+/// plus native End Turn button dwell in the bottom-right.
 /// </summary>
 internal static class EndTurnOverlay
 {
@@ -23,6 +25,9 @@ internal static class EndTurnOverlay
     private static int _lastAppliedFontSize = -1;
     private static float _lastAppliedOpacity = -1f;
 
+    private static NCombatUi? _cachedCombatUi;
+    private static Control? _cachedNativeButton;
+
     internal static void Sync(bool visible)
     {
         if (!visible || SettingsStore.Current.HideEndTurnButton)
@@ -31,47 +36,75 @@ internal static class EndTurnOverlay
             return;
         }
 
+        EnsureNativeEndTurnCached();
         EnsureButton();
         if (_button == null)
             return;
 
         ApplyPresentation();
-        _button.Visible = true;
         PositionButton();
+        if (_button != null && NodeQuery.IsLive(_button))
+            _button.Visible = SettingsStore.Current.ShowOverlays;
     }
 
     internal static bool ContainsPoint(Vector2 globalPos) =>
-        _buttonBounds.Size.X >= 1 && _buttonBounds.HasPoint(globalPos);
+        (_buttonBounds.Size.X >= 1 && _buttonBounds.HasPoint(globalPos))
+        || NativeContainsPoint(globalPos);
 
     internal static bool TryHitAt(Vector2 globalPos)
     {
-        if (_button == null || !NodeQuery.IsLive(_button) || !_button.Visible)
-            return false;
+        if (_button != null && NodeQuery.IsLive(_button) && _button.Visible && _buttonBounds.HasPoint(globalPos))
+            return true;
 
-        return ContainsPoint(globalPos);
+        return NativeContainsPoint(globalPos);
     }
 
     internal static DwellHoverService.Target? GetDwellTarget()
     {
-        if (_button == null || !NodeQuery.IsLive(_button) || !_button.Visible)
+        if (_button == null || !NodeQuery.IsLive(_button) || _buttonBounds.Size.X < 1)
             return null;
 
         return DwellHoverService.EndTurn(_buttonBounds, PressEndTurnCore);
     }
 
+    internal static void CollectNativeDwellTargets(List<DwellHoverService.Target> targets)
+    {
+        if (OverlayModeService.GetMode() != OverlayMode.CombatPlay)
+            return;
+
+        if (!RunManager.Instance.IsInProgress || !CombatManager.Instance.IsInProgress)
+            return;
+
+        if (!TryGetNativeEndTurnButton(out var button))
+            return;
+
+        var rect = button.GetGlobalRect();
+        if (rect.Size.X < 8f || rect.Size.Y < 8f)
+            return;
+
+        targets.Add(DwellHoverService.EndTurn(rect, PressEndTurnCore));
+    }
+
     internal static bool TryActivateAt(Vector2 globalPos, out string message)
     {
         message = string.Empty;
-        if (_button == null || !NodeQuery.IsLive(_button) || !_button.Visible)
-            return false;
 
-        if (!ContainsPoint(globalPos))
+        if (_button != null && NodeQuery.IsLive(_button) && _button.Visible && _buttonBounds.HasPoint(globalPos))
+        {
+            if (!DwellActivationCooldown.TryRunMenuAction(PressEndTurnCore))
+                return false;
+
+            message = "EndTurn button clicked";
+            return true;
+        }
+
+        if (!NativeContainsPoint(globalPos))
             return false;
 
         if (!DwellActivationCooldown.TryRunMenuAction(PressEndTurnCore))
             return false;
 
-        message = "EndTurn button clicked";
+        message = "Native End Turn clicked";
         return true;
     }
 
@@ -80,6 +113,34 @@ internal static class EndTurnOverlay
         if (_button != null && NodeQuery.IsLive(_button))
             _button.Visible = false;
         _buttonBounds = new Rect2(0, 0, 0, 0);
+        _cachedCombatUi = null;
+        _cachedNativeButton = null;
+    }
+
+    internal static void EnsureNativeEndTurnCached()
+    {
+        if (_cachedNativeButton != null && NodeQuery.IsLive(_cachedNativeButton))
+            return;
+
+        _cachedCombatUi = null;
+        _cachedNativeButton = null;
+
+        var tree = Engine.GetMainLoop() as SceneTree;
+        if (tree?.Root == null)
+            return;
+
+        foreach (var ui in NodeQuery.FindAll<NCombatUi>(tree.Root))
+        {
+            if (!NodeQuery.IsVisible(ui))
+                continue;
+
+            _cachedCombatUi = ui;
+            break;
+        }
+
+        var native = _cachedCombatUi?.EndTurnButton as Control;
+        if (native != null && NodeQuery.IsLive(native) && NodeQuery.IsVisible(native))
+            _cachedNativeButton = native;
     }
 
     private static void EnsureButton()
@@ -163,6 +224,29 @@ internal static class EndTurnOverlay
         _buttonBounds = _button.GetGlobalRect();
     }
 
+    private static bool NativeContainsPoint(Vector2 globalPos)
+    {
+        if (!TryGetNativeEndTurnButton(out var button))
+            return false;
+
+        return button.GetGlobalRect().HasPoint(globalPos);
+    }
+
+    private static bool TryGetNativeEndTurnButton(out Control button)
+    {
+        button = null!;
+        EnsureNativeEndTurnCached();
+
+        if (_cachedNativeButton == null || !NodeQuery.IsLive(_cachedNativeButton) || !NodeQuery.IsVisible(_cachedNativeButton))
+            return false;
+
+        if (_cachedNativeButton is NClickableControl { IsEnabled: false })
+            return false;
+
+        button = _cachedNativeButton;
+        return true;
+    }
+
     private static void PressEndTurnCore()
     {
         if (TrySetReadyToEndTurn())
@@ -201,16 +285,18 @@ internal static class EndTurnOverlay
     {
         try
         {
-            var tree = Engine.GetMainLoop() as SceneTree;
-            var endTurnButton = tree?.Root == null
-                ? null
-                : NodeQuery.FindAll<NCombatUi>(tree.Root).FirstOrDefault()?.EndTurnButton;
-            if (endTurnButton == null || !NodeQuery.IsLive(endTurnButton))
+            EnsureNativeEndTurnCached();
+            if (_cachedNativeButton == null || !NodeQuery.IsLive(_cachedNativeButton))
                 return false;
 
-            endTurnButton.EmitSignal(Button.SignalName.Pressed);
-            ModLogger.Info("EndTurn via EndTurnButton.EmitSignal(Pressed)");
-            return true;
+            if (_cachedNativeButton is NClickableControl clickable)
+            {
+                clickable.ForceClick();
+                ModLogger.Info("EndTurn via native ForceClick");
+                return true;
+            }
+
+            return false;
         }
         catch (Exception ex)
         {

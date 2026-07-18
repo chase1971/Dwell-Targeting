@@ -9,8 +9,6 @@ namespace DwellTargeting;
 /// </summary>
 internal static class HandInputBlocker
 {
-    private const int RescanIntervalFrames = 10;
-
     private static readonly List<(Control Control, Control.MouseFilterEnum Original)> _blocked = new();
     private static readonly HashSet<ulong> _blockedIds = new();
     private static bool _active;
@@ -58,7 +56,7 @@ internal static class HandInputBlocker
 
         _framesSinceRescan++;
         int childCount = hand.GetChildCount();
-        if (childCount != _lastHandChildCount || _framesSinceRescan >= RescanIntervalFrames)
+        if (childCount != _lastHandChildCount || _framesSinceRescan >= ScanInterval.Frames())
         {
             _lastHandChildCount = childCount;
             _framesSinceRescan = 0;

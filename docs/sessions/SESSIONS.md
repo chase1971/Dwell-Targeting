@@ -1,5 +1,19 @@
 # Dwell Targeting — Session Log
 
+## 2026-07-18 — Screen phases, events, chest exploit, quit dialog
+
+**Files changed:** MainMenuOverlay.cs (new), CardConfirmPhaseQuery.cs (new), EventOverlay.cs, PileSelectOverlay.cs, HandSelectOverlay.cs, RoomOverlay.cs, DeckViewOverlay.cs, ViewScrollOverlay.cs, HandTargetingOverlay.cs, EventSelectionService.cs, plus prior session batch (ProceedTargetBuilder, PotionSlotOverlay, PauseMenuOverlay, UtilityBarOverlay, RewardsOverlay, ShopOverlay, etc.)
+
+**What worked:** Main menu hitboxes tightened (no vertical bleed). Quit Yes/No via `NPopupYesNoButton` + dialog-only dwell. Event options rescan on choice/signature; root-tree fallback for `NEventOptionButton`. Upgrade/removal **confirm phase** — only Back + checkmark, no background PickCard. Treasure chest drops chest dwell after open (blocks infinite-gold re-trigger); Skip/proceed rescans. View Upgrades toggle + scroll strip on card-grid pick screens. Build green; installed to STS2 mods folder.
+
+**Current state:** Green — installed; user smoke-test pending on quit dialog + event multi-step flows.
+
+**File size flag:** HandTargetingOverlay.cs ~626 lines; ShopOverlay.cs ~535 lines — monitor before next feature batch.
+
+**Next session:** User verify quit Yes/No + Tablet of Truth multi-step; if quit still fails, log dialog node types at runtime. Backlog B1 card-reward skip still open.
+
+---
+
 ## 2026-06-20 — Shop purchases + hitbox alignment (v0.10.45 → v0.10.56)
 
 **Files changed:** ShopOverlay.cs (~437 lines), ShopSelectionService.cs (new), ShopInventoryQuery.cs (new), ShopAlignmentDiagnostics.cs (new), DwellDebugOverlay.cs (new), HandTargetingOverlay.cs (+19), DeckViewOverlay.cs (new), MapOverlay.cs, EventOverlay.cs, DwellSettings/SettingsStore/ModConfigEntries (showHitboxOverlay toggle), mod_manifest/ModEntry v0.10.56

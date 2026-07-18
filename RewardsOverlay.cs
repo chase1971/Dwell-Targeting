@@ -1,6 +1,4 @@
 using Godot;
-using MegaCrit.Sts2.Core.Nodes.CommonUi;
-using MegaCrit.Sts2.Core.Nodes.GodotExtensions;
 using MegaCrit.Sts2.Core.Nodes.Rewards;
 using MegaCrit.Sts2.Core.Nodes.Screens;
 
@@ -11,14 +9,21 @@ namespace DwellTargeting;
 /// user wants), plus a direct native dwell on the Skip/Proceed button. Each item's dwell hitbox is
 /// clipped to its own vertical band so hovering the 2nd item can never claim the 1st (the items'
 /// generous hitboxes used to overlap and the topmost always won).
+/// Card-pick drafts are handled by <see cref="PileSelectOverlay"/> when mode is PileSelect.
 /// </summary>
 internal static class RewardsOverlay
 {
-    private const float ProceedHitboxPadding = 24f;
     private const string LegacyCanvasName = "DwellRewardsLayer";
 
+    private const int PhaseLoot = 1;
+    private const int PhaseProceed = 2;
+    private const float LootItemPadding = 10f;
+
     private static readonly Dictionary<ulong, NRewardButton> _rewards = new();
-    private static NProceedButton? _proceedButton;
+    private static List<CardPickTargetQuery.CachedPickTarget>? _cachedDwellTargets;
+    private static ulong _cachedScreenId;
+    private static int _cachedPhase;
+    private static long _proceedReadyAtMs;
     private static long _nextProceedDiagTick;
     private static bool _lastInsideProceed;
 
@@ -31,7 +36,15 @@ internal static class RewardsOverlay
             return;
         }
 
-        DestroyLegacySideButtonLayer();
+        if (OverlayModeService.TryGetPileSelectScreen(out _))
+        {
+            ClearTargets();
+            return;
+        }
+
+        ulong screenId = rewardsScreen.GetInstanceId();
+        if (_cachedScreenId == screenId && _cachedDwellTargets is { Count: > 0 })
+            return;
 
         _rewards.Clear();
         foreach (var reward in RewardsScreenQuery.GetRewardButtons(rewardsScreen))
@@ -40,24 +53,67 @@ internal static class RewardsOverlay
                 _rewards[reward.GetInstanceId()] = reward;
         }
 
-        _proceedButton = RewardsScreenQuery.GetProceedButton(rewardsScreen);
+        int phase = _rewards.Count > 0 ? PhaseLoot : PhaseProceed;
 
-        LogProceedDiagnostic();
+        if (phase == PhaseProceed)
+        {
+            if (ProceedTargetBuilder.TryBuildFromRewardsScreen(rewardsScreen) == null)
+            {
+                ClearTargets();
+                return;
+            }
+
+            if (_proceedReadyAtMs == 0)
+            {
+                _proceedReadyAtMs = System.Environment.TickCount64 + ProceedTargetBuilder.SettleMs;
+                ModLogger.Info(
+                    $"[Rewards] waiting {ProceedTargetBuilder.SettleMs}ms for proceed button before snapshot.");
+                return;
+            }
+
+            if (System.Environment.TickCount64 < _proceedReadyAtMs)
+                return;
+        }
+        else
+        {
+            _proceedReadyAtMs = 0;
+        }
+
+        DestroyLegacySideButtonLayer();
+
+        _cachedScreenId = screenId;
+        _cachedPhase = phase;
+        _cachedDwellTargets = phase == PhaseLoot
+            ? BuildLootCachedTargets(rewardsScreen)
+            : ProceedTargetBuilder.TryBuildFromRewardsScreen(rewardsScreen);
+
+        ModLogger.Info(
+            $"[Rewards] phase={phase} snapshot — dwell targets={_cachedDwellTargets?.Count ?? 0}");
+
+        if (SettingsStore.Current.EnablePerfLogging)
+            LogProceedDiagnostic();
     }
 
     internal static void CollectDwellTargets(List<DwellHoverService.Target> targets)
     {
-        // Build each reward's generous hitbox, then clip vertically against neighbours so adjacent
-        // items never overlap (the cause of "hover item 2, claim item 1").
+        if (_cachedDwellTargets == null)
+            return;
+
+        CardPickTargetQuery.AppendCachedPickTargets(_cachedDwellTargets, targets);
+    }
+
+    private static List<CardPickTargetQuery.CachedPickTarget> BuildLootCachedTargets(NRewardsScreen screen)
+    {
         var items = new List<(Rect2 rect, NRewardButton reward)>();
         foreach (var reward in _rewards.Values)
         {
-            if (TryGetItemRect(reward, out var rect))
+            if (TryMeasureItemRect(reward, out var rect))
                 items.Add((rect, reward));
         }
 
         items.Sort((a, b) => a.rect.GetCenter().Y.CompareTo(b.rect.GetCenter().Y));
 
+        var list = new List<CardPickTargetQuery.CachedPickTarget>();
         for (int i = 0; i < items.Count; i++)
         {
             var rect = items[i].rect;
@@ -80,18 +136,32 @@ internal static class RewardsOverlay
                 continue;
 
             var captured = items[i].reward;
-            targets.Add(DwellHoverService.Card(rect, () => Claim(captured), $"RewardItem:{i + 1}"));
+            int slot = i + 1;
+            list.Add(new CardPickTargetQuery.CachedPickTarget
+            {
+                Bounds = rect,
+                Activate = () => Claim(captured),
+                Name = $"RewardItem:{slot}",
+                Menu = false
+            });
         }
 
-        if (TryGetProceedRect(out var prect))
-            targets.Add(DwellHoverService.Menu(prect, ActivateProceed, "NativeProceed:Skip"));
+        ProceedTargetBuilder.AppendSkipOrProceedTargets(screen, list);
+        return list;
     }
 
     internal static void Hide()
     {
         _rewards.Clear();
-        _proceedButton = null;
-        DestroyLegacySideButtonLayer();
+        ClearTargets();
+    }
+
+    private static void ClearTargets()
+    {
+        _cachedDwellTargets = null;
+        _cachedScreenId = 0;
+        _cachedPhase = 0;
+        _proceedReadyAtMs = 0;
     }
 
     /// <summary>Remove numbered side buttons from older builds (v0.10.30 and earlier).</summary>
@@ -123,23 +193,21 @@ internal static class RewardsOverlay
     internal static bool TryRouteClick(Vector2 globalPos, out string message)
     {
         message = string.Empty;
+        if (_cachedDwellTargets == null)
+            return false;
 
-        foreach (var reward in _rewards.Values)
+        foreach (var target in _cachedDwellTargets)
         {
-            if (TryGetItemRect(reward, out var rect) && rect.HasPoint(globalPos))
-            {
-                Claim(reward);
-                message = "Reward item claimed";
-                return true;
-            }
-        }
+            if (!target.Bounds.HasPoint(globalPos))
+                continue;
 
-        if (TryGetProceedRect(out var prect) && prect.HasPoint(globalPos))
-        {
-            if (!DwellActivationCooldown.TryRunMenuAction(ActivateProceed))
+            if (target.Menu && !DwellActivationCooldown.TryRunMenuAction(target.Activate))
                 return false;
 
-            message = "Native proceed clicked";
+            if (!target.Menu)
+                target.Activate();
+
+            message = target.Menu ? "Native proceed clicked" : "Reward item claimed";
             return true;
         }
 
@@ -149,19 +217,15 @@ internal static class RewardsOverlay
     internal static bool TryHitDwellButton(Vector2 globalPos, out string message)
     {
         message = string.Empty;
+        if (_cachedDwellTargets == null)
+            return false;
 
-        foreach (var reward in _rewards.Values)
+        foreach (var target in _cachedDwellTargets)
         {
-            if (TryGetItemRect(reward, out var rect) && rect.HasPoint(globalPos))
-            {
-                message = "Hit reward item";
-                return true;
-            }
-        }
+            if (!target.Bounds.HasPoint(globalPos))
+                continue;
 
-        if (TryGetProceedRect(out var prect) && prect.HasPoint(globalPos))
-        {
-            message = "Hit native proceed";
+            message = target.Menu ? "Hit native proceed" : "Hit reward item";
             return true;
         }
 
@@ -170,84 +234,76 @@ internal static class RewardsOverlay
 
     internal static bool ContainsPoint(Vector2 globalPos)
     {
-        foreach (var reward in _rewards.Values)
+        if (_cachedDwellTargets == null)
+            return false;
+
+        foreach (var target in _cachedDwellTargets)
         {
-            if (TryGetItemRect(reward, out var rect) && rect.HasPoint(globalPos))
+            if (target.Bounds.HasPoint(globalPos))
                 return true;
         }
 
-        return TryGetProceedRect(out var prect) && prect.HasPoint(globalPos);
+        return false;
     }
 
     private static void Claim(NRewardButton reward)
     {
         if (NodeQuery.IsLive(reward))
             RewardSelectionService.TryClaim(reward);
+
+        ClearTargets();
     }
 
-    private static bool TryGetItemRect(NRewardButton reward, out Rect2 rect)
+    private static bool TryMeasureItemRect(NRewardButton reward, out Rect2 rect)
     {
         rect = default;
         if (!NodeQuery.IsLive(reward) || !NodeQuery.IsVisible(reward))
             return false;
 
-        if (!ControlHitboxService.TryGetDwellRect(reward, out rect))
+        // Descendant union on NRewardButton overshoots the row (icon/label children sit above the
+        // button root), which skews loot overlays upward and breaks vertical band clipping.
+        rect = reward.GetGlobalRect();
+        if (rect.Size.X < 8f || rect.Size.Y < 8f)
             return false;
 
-        return rect.Size.X >= 8f && rect.Size.Y >= 8f;
+        rect = rect.Grow(LootItemPadding);
+        return true;
     }
 
     private static bool TryGetProceedRect(out Rect2 rect)
     {
         rect = default;
-        if (_proceedButton == null || !NodeQuery.IsLive(_proceedButton) || !NodeQuery.IsVisible(_proceedButton))
+        if (_cachedDwellTargets == null)
             return false;
 
-        if (_proceedButton is NClickableControl { IsEnabled: false })
-            return false;
-
-        rect = _proceedButton.GetGlobalRect();
-        if (rect.Size.X < 8f || rect.Size.Y < 8f)
-            return false;
-
-        // The button has a hover/pulse animation (~±7 px) and the head-mouse wobbles; pad the dwell
-        // hitbox so the cursor stays "inside" instead of flickering across the edge.
-        rect = rect.Grow(ProceedHitboxPadding);
-        return true;
-    }
-
-    private static void ActivateProceed()
-    {
-        if (_proceedButton == null || !NodeQuery.IsLive(_proceedButton))
+        foreach (var target in _cachedDwellTargets)
         {
-            ModLogger.Warn("[ProceedDiag] ActivateProceed fired but proceed button missing/dead.");
-            return;
+            if (!target.Menu)
+                continue;
+
+            rect = target.Bounds;
+            return true;
         }
 
-        ModLogger.Info($"[ProceedDiag] ActivateProceed firing on '{_proceedButton.Name}'.");
-        RewardSelectionService.TryProceed(_proceedButton);
+        return false;
     }
 
-    /// <summary>
-    /// Throttled trace of the Proceed/Skip button state + whether the cursor is inside its dwell rect.
-    /// </summary>
     private static void LogProceedDiagnostic()
     {
         long now = System.Environment.TickCount64;
 
-        if (_proceedButton == null)
+        if (!TryGetProceedRect(out var rect))
         {
             if (now < _nextProceedDiagTick)
                 return;
             _nextProceedDiagTick = now + 1000;
-            ModLogger.Info("[ProceedDiag] proceed button = null (none found on this rewards screen).");
+            ModLogger.Info("[ProceedDiag] skip button = null (none found on this rewards screen).");
             _lastInsideProceed = false;
             return;
         }
 
-        bool hasRect = TryGetProceedRect(out var rect);
         var mouse = DwellHoverService.GetMousePosition();
-        bool inside = hasRect && mouse != null && rect.HasPoint(mouse.Value);
+        bool inside = mouse != null && rect.HasPoint(mouse.Value);
 
         bool edge = inside != _lastInsideProceed;
         _lastInsideProceed = inside;
@@ -256,8 +312,8 @@ internal static class RewardsOverlay
         _nextProceedDiagTick = now + 1000;
 
         ModLogger.Info(
-            $"[ProceedDiag] name={_proceedButton.Name} hasRect={hasRect} " +
-            $"mouse=({(mouse?.X ?? -1f):F0},{(mouse?.Y ?? -1f):F0}) insideProceed={inside} " +
-            $"menuCooldown={DwellActivationCooldown.IsMenuBlocked} rewards={_rewards.Count}");
+            $"[ProceedDiag] hasRect=true mouse=({(mouse?.X ?? -1f):F0},{(mouse?.Y ?? -1f):F0}) " +
+            $"insideProceed={inside} menuCooldown={DwellActivationCooldown.IsMenuBlocked} " +
+            $"rewards={_rewards.Count} dwellTargets={_cachedDwellTargets?.Count ?? 0}");
     }
 }

@@ -7,13 +7,12 @@ using MegaCrit.Sts2.Core.Nodes.Rooms;
 namespace DwellTargeting;
 
 /// <summary>
-/// Hover-to-select for event option buttons. Ancient relic rows get offset number buttons (hover the
-/// row to read the tooltip, dwell the number to pick). Proceed/Skip always uses a direct padded dwell
-/// on the native control — never an offset number.
+/// All event options use offset number buttons — hover the row to read tooltips, dwell the number
+/// to pick. Ancient encounters use gold numbers; normal events use the standard card-button style.
+/// Proceed/Skip always uses a direct padded dwell on the native control — never an offset number.
 /// </summary>
 internal static class EventOverlay
 {
-    private const int RescanIntervalFrames = 10;
     private const int CanvasLayerOrder = 131;
     private const int NumberSize = 54;
     private const float NumberGap = 14f;
@@ -22,14 +21,25 @@ internal static class EventOverlay
 
     private static NEventRoom? _room;
     private static List<Control>? _cachedButtons;
-    private static List<Control>? _cachedAncientButtons;
+    private static bool _usesOffsetNumbers;
+    private static bool _ancientGoldStyle;
+    private static List<(Rect2 Bounds, Control Option, int Slot)>? _dwellTargets;
     private static Control? _proceedControl;
-    private static int _framesSinceScan;
-    private static long _nextDiagTick;
+    private static ulong _cachedRoomId;
+    private static int _cachedOptionSignature;
+    private static bool _lastShowVisuals = true;
+    private const long RescanMs = 250;
+    private static long _lastRescanTick;
 
     private static CanvasLayer? _layer;
     private static Control? _root;
     private static readonly List<Button> _numberButtons = new();
+
+    internal static void InvalidateCache()
+    {
+        _cachedOptionSignature = int.MinValue;
+        _lastRescanTick = 0;
+    }
 
     internal static void Sync()
     {
@@ -40,66 +50,59 @@ internal static class EventOverlay
             return;
         }
 
-        _framesSinceScan++;
-        if (_cachedButtons == null || _framesSinceScan >= RescanIntervalFrames)
-        {
-            _framesSinceScan = 0;
-            _cachedButtons = FindOptionButtons(_room);
-            _cachedAncientButtons = _cachedButtons.Where(IsAncientOption).ToList();
-            _proceedControl = FindProceedControl();
-        }
+        bool showChanged = _lastShowVisuals != SettingsStore.Current.ShowOverlays;
+        if (showChanged)
+            _lastShowVisuals = SettingsStore.Current.ShowOverlays;
 
-        if (_cachedAncientButtons is { Count: > 0 })
-            SyncNumberButtons();
-        else
-            HideNumberButtons();
-
+        ulong roomId = _room.GetInstanceId();
         long now = System.Environment.TickCount64;
-        if (now >= _nextDiagTick)
+        var freshButtons = FindOptionButtons(_room);
+        int optionSignature = ComputeOptionSignature(freshButtons);
+        bool hasOptionTargets = _usesOffsetNumbers && _dwellTargets is { Count: > 0 };
+        bool hasProceedOnly = freshButtons.Count == 0
+            && _proceedControl != null
+            && NodeQuery.IsLive(_proceedControl)
+            && NodeQuery.IsVisible(_proceedControl);
+
+        if (_cachedRoomId == roomId
+            && !showChanged
+            && optionSignature == _cachedOptionSignature
+            && (hasOptionTargets || hasProceedOnly)
+            && now - _lastRescanTick < RescanMs)
         {
-            _nextDiagTick = now + 2000;
-            ModLogger.Info(
-                $"[Event] sync options={_cachedButtons?.Count ?? -1} ancient={_cachedAncientButtons?.Count ?? -1} " +
-                $"proceed={(_proceedControl != null)}.");
+            if (!hasOptionTargets)
+                HideNumberButtons();
+            return;
         }
+
+        _lastRescanTick = now;
+        _cachedOptionSignature = optionSignature;
+
+        _cachedRoomId = roomId;
+        _cachedButtons = freshButtons;
+        _usesOffsetNumbers = _cachedButtons is { Count: > 0 };
+        _ancientGoldStyle = UsesAncientGoldStyle(_room);
+        _proceedControl = FindProceedControl();
+        RebuildNumberLayout();
+
+        if (!_usesOffsetNumbers)
+            HideNumberButtons();
     }
 
     internal static void CollectDwellTargets(List<DwellHoverService.Target> targets)
     {
-        if (_cachedButtons == null)
-            return;
-
-        if (_cachedAncientButtons is { Count: > 0 })
+        if (_usesOffsetNumbers && _dwellTargets != null)
         {
-            for (int i = 0; i < _numberButtons.Count && i < _cachedAncientButtons.Count; i++)
+            foreach (var (bounds, option, slot) in _dwellTargets)
             {
-                var button = _numberButtons[i];
-                var option = _cachedAncientButtons[i];
-                if (button == null || !NodeQuery.IsLive(button) || !button.Visible)
-                    continue;
                 if (!NodeQuery.IsLive(option) || !NodeQuery.IsVisible(option))
                     continue;
 
                 var captured = option;
                 targets.Add(DwellHoverService.Menu(
-                    button.GetGlobalRect(),
+                    bounds,
                     () => EventSelectionService.TrySelect(captured),
-                    $"AncientOption:{i + 1}"));
-            }
-        }
-
-        foreach (var button in _cachedButtons.Where(b => !IsAncientOption(b)))
-        {
-            if (!NodeQuery.IsLive(button) || !NodeQuery.IsVisible(button))
-                continue;
-
-            if (ControlHitboxService.TryGetDwellRect(button, out var rect))
-            {
-                var captured = button;
-                targets.Add(DwellHoverService.Menu(
-                    rect,
-                    () => EventSelectionService.TrySelect(captured),
-                    $"EventOption:{button.Name}"));
+                    $"EventOption:{slot}"));
             }
         }
 
@@ -111,16 +114,120 @@ internal static class EventOverlay
     {
         _room = null;
         _cachedButtons = null;
-        _cachedAncientButtons = null;
+        _usesOffsetNumbers = false;
+        _ancientGoldStyle = false;
+        _dwellTargets = null;
         _proceedControl = null;
-        _framesSinceScan = 0;
+        _cachedRoomId = 0;
+        _cachedOptionSignature = int.MinValue;
+        _lastShowVisuals = true;
+        _lastRescanTick = 0;
         HideNumberButtons();
     }
 
-    private static bool IsAncientOption(Control option) =>
-        NodeQuery.IsLive(option)
-        && !IsProceedLike(option)
-        && option.Name.ToString().Contains("Ancient", StringComparison.OrdinalIgnoreCase);
+    private static int ComputeOptionSignature(List<Control> buttons)
+    {
+        int key = buttons.Count;
+        foreach (var button in buttons)
+            key = HashCode.Combine(key, (int)button.GetInstanceId());
+
+        return key;
+    }
+
+    private static bool UsesAncientGoldStyle(NEventRoom room)
+    {
+        foreach (var layout in NodeQuery.FindAll<NAncientEventLayout>(room))
+        {
+            if (NodeQuery.IsLive(layout) && NodeQuery.IsVisible(layout))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static void RebuildNumberLayout()
+    {
+        if (_cachedButtons == null || _cachedButtons.Count == 0 || !_usesOffsetNumbers)
+        {
+            _dwellTargets = null;
+            HideNumberButtons();
+            return;
+        }
+
+        bool showVisuals = SettingsStore.Current.ShowOverlays;
+        var targets = new List<(Rect2, Control, int)>();
+        EnsureCanvas();
+        if (_root == null)
+            return;
+
+        while (_numberButtons.Count < _cachedButtons.Count)
+        {
+            int index = _numberButtons.Count + 1;
+            Color bg = _ancientGoldStyle
+                ? new Color(0.10f, 0.08f, 0.02f, 0.95f)
+                : new Color(0.08f, 0.10f, 0.14f, 0.95f);
+            Color border = _ancientGoldStyle
+                ? new Color(1f, 0.82f, 0.30f, 1f)
+                : new Color(0.55f, 0.75f, 0.95f, 1f);
+
+            var button = OverlayButtonFactory.CreateMenuButton(
+                $"EventPick{index}",
+                index.ToString(),
+                NumberSize,
+                bg,
+                border,
+                () => { });
+            button.MouseFilter = Control.MouseFilterEnum.Ignore;
+            _root.AddChild(button);
+            _numberButtons.Add(button);
+        }
+
+        _root.Visible = showVisuals;
+
+        for (int i = 0; i < _numberButtons.Count; i++)
+        {
+            var button = _numberButtons[i];
+            if (button == null || !NodeQuery.IsLive(button))
+                continue;
+
+            if (i >= _cachedButtons.Count
+                || !NodeQuery.IsLive(_cachedButtons[i])
+                || !NodeQuery.IsVisible(_cachedButtons[i]))
+            {
+                button.Visible = false;
+                continue;
+            }
+
+            if (!ControlHitboxService.TryGetDwellRect(_cachedButtons[i], out var optionRect))
+                optionRect = _cachedButtons[i].GetGlobalRect();
+
+            if (optionRect.Size.X < 8f || optionRect.Size.Y < 8f)
+            {
+                button.Visible = false;
+                continue;
+            }
+
+            optionRect = optionRect.Grow(6f);
+
+            OverlayButtonFactory.ApplySize(button, NumberSize);
+            button.Text = (i + 1).ToString();
+
+            float x = optionRect.Position.X - NumberSize - NumberGap;
+            if (x < ScreenMargin)
+                x = optionRect.End.X + NumberGap;
+
+            float y = optionRect.GetCenter().Y - (NumberSize / 2f);
+            var bounds = new Rect2(x, y, NumberSize, NumberSize);
+
+            button.GlobalPosition = bounds.Position;
+            button.Size = bounds.Size;
+            button.Visible = showVisuals;
+
+            targets.Add((bounds, _cachedButtons[i], i + 1));
+        }
+
+        _dwellTargets = targets;
+    }
 
     private static bool IsProceedLike(Control control)
     {
@@ -178,11 +285,15 @@ internal static class EventOverlay
 
     private static Control? FindProceedControl()
     {
-        var root = (Engine.GetMainLoop() as SceneTree)?.Root;
-        if (root == null)
+        if (_room == null || !NodeQuery.IsLive(_room))
             return null;
 
-        foreach (var button in NodeQuery.FindAll<NProceedButton>(root))
+        return FindProceedInSubtree(_room);
+    }
+
+    private static Control? FindProceedInSubtree(Node start)
+    {
+        foreach (var button in NodeQuery.FindAll<NProceedButton>(start))
         {
             if (button is not Control control || !NodeQuery.IsVisible(control))
                 continue;
@@ -192,7 +303,7 @@ internal static class EventOverlay
             return control;
         }
 
-        foreach (var button in NodeQuery.FindAll<NEventOptionButton>(root))
+        foreach (var button in NodeQuery.FindAll<NEventOptionButton>(start))
         {
             if (button is not Control control || !NodeQuery.IsVisible(control))
                 continue;
@@ -242,58 +353,6 @@ internal static class EventOverlay
         ModLogger.Info($"[Event] Proceed '{_proceedControl.Name}' via E accept key.");
     }
 
-    private static void SyncNumberButtons()
-    {
-        if (_cachedAncientButtons == null)
-            return;
-
-        EnsureCanvas();
-        if (_root == null)
-            return;
-
-        _root.Visible = true;
-
-        while (_numberButtons.Count < _cachedAncientButtons.Count)
-        {
-            var button = OverlayButtonFactory.CreateMenuButton(
-                $"AncientPick{_numberButtons.Count + 1}",
-                (_numberButtons.Count + 1).ToString(),
-                NumberSize,
-                new Color(0.10f, 0.08f, 0.02f, 0.95f),
-                new Color(1f, 0.82f, 0.30f, 1f),
-                () => { });
-            button.MouseFilter = Control.MouseFilterEnum.Ignore;
-            _root.AddChild(button);
-            _numberButtons.Add(button);
-        }
-
-        for (int i = 0; i < _numberButtons.Count; i++)
-        {
-            var button = _numberButtons[i];
-            if (button == null || !NodeQuery.IsLive(button))
-                continue;
-
-            if (i >= _cachedAncientButtons.Count
-                || !NodeQuery.IsLive(_cachedAncientButtons[i])
-                || !NodeQuery.IsVisible(_cachedAncientButtons[i])
-                || !ControlHitboxService.TryGetDwellRect(_cachedAncientButtons[i], out var optionRect))
-            {
-                button.Visible = false;
-                continue;
-            }
-
-            OverlayButtonFactory.ApplySize(button, NumberSize);
-
-            float x = optionRect.Position.X - NumberSize - NumberGap;
-            if (x < ScreenMargin)
-                x = optionRect.End.X + NumberGap;
-
-            float y = optionRect.GetCenter().Y - (NumberSize / 2f);
-            button.GlobalPosition = new Vector2(x, y);
-            button.Visible = true;
-        }
-    }
-
     private static void HideNumberButtons()
     {
         foreach (var button in _numberButtons)
@@ -331,11 +390,24 @@ internal static class EventOverlay
 
     private static List<Control> FindOptionButtons(NEventRoom room)
     {
-        var list = new List<Control>();
-        if (!NodeQuery.IsLive(room))
+        var list = CollectOptionButtons(room);
+        if (list.Count > 0)
             return list;
 
-        foreach (var button in NodeQuery.FindAll<NEventOptionButton>(room))
+        var root = (Engine.GetMainLoop() as SceneTree)?.Root;
+        if (root == null)
+            return list;
+
+        return CollectOptionButtons(root);
+    }
+
+    private static List<Control> CollectOptionButtons(Node root)
+    {
+        var list = new List<Control>();
+        if (!NodeQuery.IsLive(root))
+            return list;
+
+        foreach (var button in NodeQuery.FindAll<NEventOptionButton>(root))
         {
             if (button is not Control control || !NodeQuery.IsVisible(control))
                 continue;

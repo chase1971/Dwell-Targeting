@@ -18,7 +18,9 @@ internal static class EnemyLabelOverlay
 
     internal static void Sync(IReadOnlyList<Creature> enemies, int handSize)
     {
-        if (!SettingsStore.Current.ShowEnemyLabels || enemies.Count == 0)
+        if (!SettingsStore.Current.ShowEnemyLabels
+            || !SettingsStore.AreOverlayVisualsVisible()
+            || enemies.Count == 0)
         {
             Hide();
             return;

@@ -14,8 +14,6 @@ internal static class LeftHoverScrollOverlay
     private const int ArrowGap = 18;
     private const float EdgeMargin = 40f;
     private const float MapLeftInset = 130f;
-    private const int ScrollIntervalFrames = 3;
-
     private readonly record struct StripPlacement(float CenterYFraction, bool OnRightEdge);
 
     private static readonly StripPlacement[] MapPlacements =
@@ -106,7 +104,7 @@ internal static class LeftHoverScrollOverlay
         }
 
         _scrollFrameCounter++;
-        if (_scrollFrameCounter % ScrollIntervalFrames != 0)
+        if (_scrollFrameCounter % 6 != 0)
             return;
 
         MapScrollService.Scroll(overUp);

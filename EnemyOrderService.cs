@@ -7,10 +7,7 @@ namespace DwellTargeting;
 
 internal static class EnemyOrderService
 {
-    private const int NodeScanIntervalFrames = 90;
-
     private static readonly List<NCreature> _cachedNodes = new();
-    private static int _framesSinceNodeScan;
     private static int _lastAliveCount = -1;
 
     /// <summary>
@@ -41,11 +38,9 @@ internal static class EnemyOrderService
 
     internal static IReadOnlyList<NCreature> GetVisibleEnemyNodesCached()
     {
-        _framesSinceNodeScan++;
-        if (_framesSinceNodeScan < NodeScanIntervalFrames && _cachedNodes.Count > 0)
+        if (_cachedNodes.Count > 0)
             return _cachedNodes;
 
-        _framesSinceNodeScan = 0;
         _cachedNodes.Clear();
         _cachedNodes.AddRange(FindVisibleEnemyNodes());
         return _cachedNodes;
@@ -53,8 +48,8 @@ internal static class EnemyOrderService
 
     internal static void InvalidateNodeCache()
     {
-        _framesSinceNodeScan = NodeScanIntervalFrames;
         _lastAliveCount = -1;
+        _cachedNodes.Clear();
     }
 
     internal static bool DidAliveCountChange(int aliveCount)

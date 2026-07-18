@@ -7,7 +7,10 @@ namespace DwellTargeting;
 internal sealed class CardButtonRow
 {
     private const int ButtonGap = 5;
-    private const int GapAboveCard = 28;
+    internal const int DefaultGapAboveCard = 28;
+    internal const int LargeHandRightEdgeGapAboveCard = 8;
+    private const int LargeHandThreshold = 8;
+    private const int LargeHandRightEdgeCount = 3;
 
     private enum RowMode
     {
@@ -29,6 +32,19 @@ internal sealed class CardButtonRow
     private int _buttonSize;
     private int _lastAppliedFontSize = -1;
     private float _lastAppliedOpacity = -1f;
+    private Vector2 _lastButtonAnchor = new(-9999f, -9999f);
+    private Vector2 _lastLayoutOrigin = new(-9999f, -9999f);
+    private Vector2 _lastLayoutSize = Vector2.Zero;
+    private int _gapAboveCard = DefaultGapAboveCard;
+    private int _lastAppliedGap = -1;
+
+    internal static int ResolveGapAboveCard(int handSize, int slotIndexFromRight)
+    {
+        if (handSize >= LargeHandThreshold && slotIndexFromRight < LargeHandRightEdgeCount)
+            return LargeHandRightEdgeGapAboveCard;
+
+        return DefaultGapAboveCard;
+    }
 
     internal CardButtonRow(NCardHolder holder, Control? fallbackRoot)
     {
@@ -57,19 +73,23 @@ internal sealed class CardButtonRow
         _host.AddChild(_cardShield);
     }
 
-    internal void SyncSelect(int slotOneBased, NCardHolder holder, int buttonSize)
+    internal void SyncSelect(int slotOneBased, NCardHolder holder, int buttonSize, int gapAboveCard = DefaultGapAboveCard)
     {
+        SetGapAboveCard(gapAboveCard);
+
         if (_rowMode != RowMode.Select || slotOneBased != _selectSlot || buttonSize != _buttonSize || _buttons.Count == 0)
             RebuildSelectButton(slotOneBased, buttonSize);
 
         SetCardShieldBlocking(blocking: false);
-        _host.Visible = true;
+        ApplyOverlayChromeVisibility();
         UpdatePosition(holder);
         RefreshButtonAppearance();
     }
 
-    internal void SyncPlay(CardModel card, int enemyCount, NCardHolder holder, int buttonSize)
+    internal void SyncPlay(CardModel card, int enemyCount, NCardHolder holder, int buttonSize, int gapAboveCard = DefaultGapAboveCard)
     {
+        SetGapAboveCard(gapAboveCard);
+
         bool needsTargets = CardPlayService.NeedsEnemyTarget(card);
         if (_rowMode != RowMode.Play
             || needsTargets != _needsEnemyTargets
@@ -81,9 +101,32 @@ internal sealed class CardButtonRow
         }
 
         SetCardShieldBlocking(blocking: false);
-        _host.Visible = true;
+        ApplyOverlayChromeVisibility();
         UpdatePosition(holder);
         RefreshButtonAppearance();
+    }
+
+    private void ApplyOverlayChromeVisibility()
+    {
+        bool show = SettingsStore.Current.ShowOverlays;
+        if (NodeQuery.IsLive(_host))
+            _host.Visible = true;
+
+        foreach (var button in _buttons)
+        {
+            if (button != null && NodeQuery.IsLive(button))
+                button.Visible = show;
+        }
+    }
+
+    private void SetGapAboveCard(int gapAboveCard)
+    {
+        if (gapAboveCard == _gapAboveCard)
+            return;
+
+        _gapAboveCard = gapAboveCard;
+        _lastButtonAnchor = new(-9999f, -9999f);
+        _lastLayoutOrigin = new(-9999f, -9999f);
     }
 
     private void RefreshButtonAppearance()
@@ -150,7 +193,7 @@ internal sealed class CardButtonRow
 
     internal void CollectDwellTargets(List<DwellHoverService.Target> targets)
     {
-        if (!NodeQuery.IsLive(_host) || !_host.Visible)
+        if (!NodeQuery.IsLive(_host))
             return;
 
         foreach (var button in _buttons)
@@ -185,7 +228,7 @@ internal sealed class CardButtonRow
     private bool TryActivateAt(Vector2 globalPos, out string message, bool activate)
     {
         message = string.Empty;
-        if (!NodeQuery.IsLive(_host) || !_host.Visible)
+        if (!NodeQuery.IsLive(_host))
             return false;
 
         foreach (var button in _buttons)
@@ -229,18 +272,39 @@ internal sealed class CardButtonRow
 
     private void UpdatePosition(NCardHolder holder)
     {
-        if (_parentedToHolder && CardAnchorService.TryGetLocalCardRect(holder, out Rect2 localRect))
+        if (_parentedToHolder && CardAnchorService.TryGetLocalCardPlacement(holder, out var localPlacement))
         {
-            ApplyLayout(localRect.Position, localRect.Size, localCoords: true);
+            ApplyLayout(
+                localPlacement.ButtonAnchor,
+                localPlacement.Bounds.Position,
+                localPlacement.Bounds.Size,
+                localCoords: true);
             return;
         }
 
-        if (CardAnchorService.TryGetCardRect(holder, out Rect2 globalRect))
-            ApplyLayout(globalRect.Position, globalRect.Size, localCoords: false);
+        if (CardAnchorService.TryGetCardPlacement(holder, out var globalPlacement))
+        {
+            ApplyLayout(
+                globalPlacement.ButtonAnchor,
+                globalPlacement.Bounds.Position,
+                globalPlacement.Bounds.Size,
+                localCoords: false);
+        }
     }
 
-    private void ApplyLayout(Vector2 origin, Vector2 size, bool localCoords)
+    private void ApplyLayout(Vector2 buttonAnchor, Vector2 origin, Vector2 size, bool localCoords)
     {
+        if (buttonAnchor.DistanceSquaredTo(_lastButtonAnchor) < 0.25f
+            && origin.DistanceSquaredTo(_lastLayoutOrigin) < 0.25f
+            && size.DistanceSquaredTo(_lastLayoutSize) < 0.25f
+            && _gapAboveCard == _lastAppliedGap)
+            return;
+
+        _lastButtonAnchor = buttonAnchor;
+        _lastLayoutOrigin = origin;
+        _lastLayoutSize = size;
+        _lastAppliedGap = _gapAboveCard;
+
         if (_parentedToHolder && localCoords)
         {
             _cardShield.Position = origin;
@@ -262,9 +326,9 @@ internal sealed class CardButtonRow
         if (layoutSize.X < 1 || layoutSize.Y < 1)
             return;
 
-        float centerX = origin.X + (size.X / 2f);
-        float topY = origin.Y;
-        var target = new Vector2(centerX - (layoutSize.X / 2f), topY - GapAboveCard - layoutSize.Y);
+        var target = new Vector2(
+            buttonAnchor.X - (layoutSize.X / 2f),
+            buttonAnchor.Y - _gapAboveCard - layoutSize.Y);
 
         if (_parentedToHolder && localCoords)
             _layout.Position = target;
@@ -357,6 +421,10 @@ internal sealed class CardButtonRow
         _buttonActions.Clear();
         _layout = null;
         InvalidateStyleCache();
+        _lastButtonAnchor = new(-9999f, -9999f);
+        _lastLayoutOrigin = new(-9999f, -9999f);
+        _lastLayoutSize = Vector2.Zero;
+        _lastAppliedGap = -1;
     }
 
     private void InvalidateStyleCache()

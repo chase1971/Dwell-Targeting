@@ -13,36 +13,10 @@ namespace DwellTargeting;
 /// </summary>
 internal static class CombatViewSuppressionQuery
 {
-    private const int CheckIntervalMs = 200;
-
-    private static long _lastCheck;
-    private static bool _open;
-
-    internal static bool IsDeckViewOpen()
+    internal static bool DetectViewingScreenNow()
     {
         var root = (Engine.GetMainLoop() as SceneTree)?.Root;
-        if (root == null)
-            return false;
-
-        foreach (var screen in NodeQuery.FindAll<NDeckViewScreen>(root))
-        {
-            if (NodeQuery.IsVisible(screen))
-                return true;
-        }
-
-        return false;
-    }
-
-    internal static bool IsViewingScreenOpen()
-    {
-        long now = System.Environment.TickCount64;
-        if (now - _lastCheck < CheckIntervalMs)
-            return _open;
-
-        _lastCheck = now;
-        var root = (Engine.GetMainLoop() as SceneTree)?.Root;
-        _open = root != null && Walk(root);
-        return _open;
+        return root != null && Walk(root);
     }
 
     private static bool Walk(Node node)

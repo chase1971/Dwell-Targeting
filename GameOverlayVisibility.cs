@@ -4,9 +4,13 @@ namespace DwellTargeting;
 
 /// <summary>
 /// Detects when game menus/settings are open so overlays can step aside.
+/// Blocking menu nodes are found once (one tree walk), then only visibility is checked.
+/// Empty scan results are cached too — re-walk only on mode change or a slow safety interval.
 /// </summary>
 internal static class GameOverlayVisibility
 {
+    private const long RescanIntervalMs = 500;
+
     private static readonly string[] BlockingTypeNames =
     [
         "SettingsScreen",
@@ -17,60 +21,94 @@ internal static class GameOverlayVisibility
         "OptionsScreen"
     ];
 
-    private static long _lastCheckTicks;
-    private static bool _menuOpen;
-    private const int MenuCheckIntervalMs = 500;
+    private static readonly List<Node> _blockingNodes = new();
+    private static bool _nodesCached;
+    private static long _lastScanTick;
 
-    internal static bool ShouldHideOverlays()
+    internal static void InvalidateCache()
+    {
+        _nodesCached = false;
+        _lastScanTick = 0;
+    }
+
+    internal static bool ShouldHideOverlays(bool blockingMenuOpen)
     {
         if (!SettingsStore.Current.HideOverlaysInMenus)
             return false;
 
-        return IsBlockingMenuOpen();
+        return blockingMenuOpen;
     }
 
-    internal static bool IsBlockingMenuOpen()
+    /// <summary>
+    /// Call once per frame with the already-known pause-menu state to avoid duplicate tree walks.
+    /// </summary>
+    internal static bool ComputeBlockingMenuOpen(bool pauseMenuOpen)
+    {
+        if (SettingsOverlay.IsOpen || pauseMenuOpen)
+            return true;
+
+        if (!SettingsStore.Current.HideOverlaysInMenus)
+            return false;
+
+        EnsureBlockingNodesCached();
+        PruneDeadNodes();
+
+        foreach (var node in _blockingNodes)
+        {
+            if (node is CanvasItem canvas && NodeQuery.IsLive(node) && NodeQuery.IsVisible(canvas))
+                return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>One tree walk — collect every blocking menu node, then visibility-only checks.</summary>
+    private static void EnsureBlockingNodesCached()
     {
         long now = System.Environment.TickCount64;
-        if (now - _lastCheckTicks < MenuCheckIntervalMs)
-            return _menuOpen;
+        if (_nodesCached && now - _lastScanTick < RescanIntervalMs)
+            return;
 
-        _lastCheckTicks = now;
-        _menuOpen = DetectBlockingMenuOpen();
-        return _menuOpen;
-    }
-
-    private static bool DetectBlockingMenuOpen()
-    {
+        _blockingNodes.Clear();
         var tree = Engine.GetMainLoop() as SceneTree;
         if (tree?.Root == null)
-            return false;
+        {
+            _nodesCached = true;
+            _lastScanTick = now;
+            return;
+        }
 
-        return Walk(tree.Root);
+        CollectBlockingNodes(tree.Root);
+        _nodesCached = true;
+        _lastScanTick = now;
     }
 
-    private static bool Walk(Node node)
+    private static void PruneDeadNodes()
+    {
+        for (int i = _blockingNodes.Count - 1; i >= 0; i--)
+        {
+            if (!NodeQuery.IsLive(_blockingNodes[i]))
+                _blockingNodes.RemoveAt(i);
+        }
+    }
+
+    private static void CollectBlockingNodes(Node node)
     {
         if (!NodeQuery.IsLive(node))
-            return false;
+            return;
 
-        if (node is CanvasItem canvas && NodeQuery.IsVisible(canvas) && IsBlockingNode(node))
-            return true;
+        if (IsBlockingNode(node))
+            _blockingNodes.Add(node);
 
         try
         {
             foreach (var child in node.GetChildren())
-            {
-                if (Walk(child))
-                    return true;
-            }
+                CollectBlockingNodes(child);
         }
         catch
         {
             /* disposed mid-walk */
         }
-
-        return false;
     }
 
     private static bool IsBlockingNode(Node node)

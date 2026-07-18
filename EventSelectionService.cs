@@ -20,5 +20,8 @@ internal static class EventSelectionService
             ModLogger.Info($"Event option '{button.Name}' activated.");
         else
             ModLogger.Warn($"Event option '{button.Name}' activation failed.");
+
+        OverlayModeService.InvalidateCache();
+        EventOverlay.InvalidateCache();
     }
 }

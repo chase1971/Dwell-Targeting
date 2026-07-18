@@ -13,7 +13,6 @@ namespace DwellTargeting;
 /// </summary>
 internal static class ShopOverlay
 {
-    private const int RescanIntervalFrames = 10;
     private const int CanvasLayerOrder = 132;
     private const int NumberSize = 54;
     private const float NumberGap = 14f;
@@ -28,8 +27,8 @@ internal static class ShopOverlay
     private static List<Control>? _merchantButtonControls;
     private static List<Control>? _characterControls;
     private static NProceedButton? _proceedButton;
-    private static int _framesSinceScan;
-    private static long _nextDiagTick;
+    private static ulong _cachedShopId;
+    private static bool _cachedInventoryOpen;
 
     private static CanvasLayer? _layer;
     private static Control? _root;
@@ -44,33 +43,25 @@ internal static class ShopOverlay
             return;
         }
 
-        _framesSinceScan++;
-        if (_cardControls == null || _numberedControls == null || _merchantButtonControls == null
-            || _characterControls == null
-            || _framesSinceScan >= RescanIntervalFrames)
+        ulong shopId = _shopRoot.GetInstanceId();
+        bool inventoryOpen = ShopInventoryQuery.IsInventoryOpen(ResolveSearchRoot(_shopRoot));
+        if (_cardControls != null && _cachedShopId == shopId && _cachedInventoryOpen == inventoryOpen)
         {
-            _framesSinceScan = 0;
-            Rescan(_shopRoot);
+            if (_numberedControls is { Count: > 0 })
+                SyncNumberButtons();
+            else
+                HideNumberButtons();
+            return;
         }
+
+        _cachedShopId = shopId;
+        _cachedInventoryOpen = inventoryOpen;
+        Rescan(_shopRoot);
 
         if (_numberedControls is { Count: > 0 })
             SyncNumberButtons();
         else
             HideNumberButtons();
-
-        if (_cardControls is { Count: > 0 })
-            ShopAlignmentDiagnostics.Log(_cardControls[0]);
-
-        long now = System.Environment.TickCount64;
-        if (now >= _nextDiagTick)
-        {
-            _nextDiagTick = now + 2000;
-            ModLogger.Info(
-                $"[Shop] {_shopRoot.GetType().Name} inventoryOpen={ShopInventoryQuery.IsInventoryOpen(ResolveSearchRoot(_shopRoot))} " +
-                $"merchantBtn={_merchantButtonControls?.Count ?? -1} cards={_cardControls?.Count ?? -1} " +
-                $"numbered={_numberedControls?.Count ?? -1} removal={_removalControls?.Count ?? -1} " +
-                $"characters={_characterControls?.Count ?? -1} proceed={(_proceedButton != null)}");
-        }
     }
 
     internal static void CollectDwellTargets(List<DwellHoverService.Target> targets)
@@ -121,7 +112,8 @@ internal static class ShopOverlay
         _merchantButtonControls = null;
         _characterControls = null;
         _proceedButton = null;
-        _framesSinceScan = 0;
+        _cachedShopId = 0;
+        _cachedInventoryOpen = false;
         HideNumberButtons();
     }
 
@@ -129,25 +121,25 @@ internal static class ShopOverlay
     {
         message = string.Empty;
 
-        if (TryRouteDirectClick(globalPos, _merchantButtonControls, c => ActivateWare(c, 0), "Shop merchant clicked"))
+        if (TryRouteDirectClick(globalPos, _merchantButtonControls, c => ActivateWare(c, 0), 0f, "Shop merchant clicked"))
         {
             message = "Shop merchant clicked";
             return true;
         }
 
-        if (TryRouteDirectClick(globalPos, _characterControls, ActivateCharacter, "Shop character clicked"))
+        if (TryRouteDirectClick(globalPos, _characterControls, ActivateCharacter, 0f, "Shop character clicked"))
         {
             message = "Shop character clicked";
             return true;
         }
 
-        if (TryRouteDirectClick(globalPos, _cardControls, c => ActivateWare(c, 0), "Shop card clicked"))
+        if (TryRouteDirectClick(globalPos, _cardControls, c => ActivateWare(c, 0), 0f, "Shop card clicked"))
         {
             message = "Shop card clicked";
             return true;
         }
 
-        if (TryRouteDirectClick(globalPos, _removalControls, c => ActivateWare(c, 0), "Shop removal clicked"))
+        if (TryRouteDirectClick(globalPos, _removalControls, c => ActivateWare(c, 0), RemovalHitboxPadding, "Shop removal clicked"))
         {
             message = "Shop removal clicked";
             return true;
@@ -216,6 +208,7 @@ internal static class ShopOverlay
         Vector2 globalPos,
         List<Control>? controls,
         Action<Control> activate,
+        float padding,
         string _)
     {
         if (controls == null)
@@ -225,7 +218,7 @@ internal static class ShopOverlay
         {
             if (!IsSelectable(control))
                 continue;
-            if (!TryGetControlRect(control, 0f, out var rect) || !rect.HasPoint(globalPos))
+            if (!TryGetControlRect(control, padding, out var rect) || !rect.HasPoint(globalPos))
                 continue;
 
             activate(control);
@@ -239,12 +232,12 @@ internal static class ShopOverlay
     {
         rect = default;
 
-        // Shop cards render as an inner NCard visual that is offset from (and a different size than) the
-        // slot's layout rect, so the slot rect sits low/right and inconsistent. Anchor the dwell box to the
-        // card visual — the same rect the combat hand uses — so it lines up with the art.
-        if (control is NMerchantSlot cardSlot
-            && ShopSelectionService.SlotContains<NMerchantCard>(cardSlot)
-            && TryGetCardVisualRect(cardSlot, out rect))
+        // Shop cards and card-removal render inner visuals offset from the slot layout rect (low/right).
+        // Anchor dwell boxes to the slot's clickable hitbox — same canvas-transform path as combat hand cards.
+        if (control is NMerchantSlot merchantSlot
+            && (ShopSelectionService.SlotContains<NMerchantCard>(merchantSlot)
+                || ShopSelectionService.SlotContains<NMerchantCardRemoval>(merchantSlot))
+            && TryGetMerchantSlotClickRect(merchantSlot, out rect))
         {
             if (padding > 0f)
                 rect = rect.Grow(padding);
@@ -264,13 +257,12 @@ internal static class ShopOverlay
         return true;
     }
 
-    private static bool TryGetCardVisualRect(Node slot, out Rect2 rect)
+    private static bool TryGetMerchantSlotClickRect(Node slot, out Rect2 rect)
     {
         rect = default;
 
-        // The card visual is a centre-pivoted, scaled NCard whose own Control has zero size; its layout rect is
-        // useless. The slot's clickable hitbox (the control the game hit-tests) carries the real local offset and
-        // scale, so its canvas-transformed rect is the true on-screen click region — matching the cursor.
+        // Inner merchant visuals are centre-pivoted/scaled; layout rects sit offset from the art. The slot's
+        // clickable hitbox (what the game hit-tests) carries the real local offset and scale.
         float bestArea = 0f;
         foreach (var clickable in NodeQuery.FindAll<NClickableControl>(slot))
         {

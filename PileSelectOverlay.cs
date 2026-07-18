@@ -1,26 +1,40 @@
 using Godot;
 using MegaCrit.Sts2.Core.Nodes.Cards.Holders;
-using MegaCrit.Sts2.Core.Nodes.CommonUi;
-using MegaCrit.Sts2.Core.Nodes.GodotExtensions;
-using MegaCrit.Sts2.Core.Nodes.Screens.CardSelection;
+using MegaCrit.Sts2.Core.Nodes.Screens;
 
 namespace DwellTargeting;
 
 /// <summary>
-/// Hover-to-select for cards on pile/grid/choose/card-reward selection screens. Cards there are
-/// <see cref="NCardHolder"/> nodes; we register the card body itself as a dwell target (no number
-/// badges — the user wants to hover the card directly, the same way the loot rewards work).
+/// Hover-to-select for cards on pile/grid/choose/card-reward selection screens.
 /// </summary>
 internal static class PileSelectOverlay
 {
-    private const int CardRescanIntervalFrames = 5;
+    private const long LayoutSettleMs = 1000;
 
     private static Node? _cachedScreen;
     private static List<NCardHolder>? _cachedHolders;
-    private static List<Control>? _cachedConfirmButtons;
-    private static int _framesSinceCardScan;
-    private static long _nextDiagTick;
+    private static List<Control>? _cachedCardControls;
+    private static List<Control>? _cachedSkipControls;
+    private static List<CardPickTargetQuery.CachedPickTarget>? _cachedDwellTargets;
+    private static ulong _cachedScreenId;
+    private static long _layoutReadyAtMs;
+    private static long _proceedReadyAtMs;
+    private static bool _proceedSettleScheduled;
+    private static bool _pickSnapshotTaken;
+    private static bool _proceedSnapshotTaken;
+    private static bool _confirmSnapshotTaken;
     private static bool _loggedButtonTypes;
+
+    /// <summary>Card pick finished — drop card overlays and snapshot proceed once it appears.</summary>
+    internal static void NotifyPickCompleted()
+    {
+        _pickSnapshotTaken = false;
+        _proceedSnapshotTaken = false;
+        _confirmSnapshotTaken = false;
+        _proceedReadyAtMs = 0;
+        _proceedSettleScheduled = false;
+        _cachedDwellTargets = null;
+    }
 
     internal static void Sync()
     {
@@ -30,91 +44,100 @@ internal static class PileSelectOverlay
             return;
         }
 
-        bool screenChanged = _cachedScreen != screen;
-        if (screenChanged)
-            _loggedButtonTypes = false;
+        ulong screenId = screen.GetInstanceId();
 
-        _framesSinceCardScan++;
-        if (screenChanged || _cachedHolders == null || _framesSinceCardScan >= CardRescanIntervalFrames)
+        if (_cachedScreen != screen || _cachedScreenId != screenId)
         {
-            _framesSinceCardScan = 0;
-            _cachedScreen = screen;
-            _cachedHolders = FindSelectableHolders(screen);
-            _cachedConfirmButtons = FindConfirmButtons(screen);
+            ResetForScreen(screen, screenId);
+            return;
         }
 
-        long now = System.Environment.TickCount64;
-        if (now >= _nextDiagTick)
+        if (CardConfirmPhaseQuery.IsActive())
         {
-            _nextDiagTick = now + 2000;
-            ModLogger.Info($"[Pile] sync screen={screen.GetType().Name} holders={_cachedHolders.Count} confirm={_cachedConfirmButtons?.Count ?? 0}.");
+            if (!_confirmSnapshotTaken)
+                TakeConfirmSnapshot();
+            return;
+        }
 
-            if ((_cachedConfirmButtons?.Count ?? 0) == 0 && !_loggedButtonTypes)
+        if (_confirmSnapshotTaken)
+        {
+            _confirmSnapshotTaken = false;
+            _pickSnapshotTaken = false;
+            _proceedSnapshotTaken = false;
+            _cachedDwellTargets = null;
+        }
+
+        if (_pickSnapshotTaken && _proceedSnapshotTaken)
+            return;
+
+        if (_pickSnapshotTaken)
+        {
+            if (AreOfferedCardsStillVisible())
             {
-                _loggedButtonTypes = true;
-                LogButtonLikeTypes(screen);
+                _proceedSettleScheduled = false;
+                _proceedReadyAtMs = 0;
+                return;
             }
+
+            if (!_proceedSettleScheduled)
+            {
+                _proceedSettleScheduled = true;
+                _proceedReadyAtMs = System.Environment.TickCount64 + ProceedTargetBuilder.SettleMs;
+                ModLogger.Info(
+                    $"[Pile] waiting {ProceedTargetBuilder.SettleMs}ms for proceed button before snapshot.");
+                return;
+            }
+
+            if (System.Environment.TickCount64 < _proceedReadyAtMs)
+                return;
+
+            TryTakeProceedSnapshot();
+            return;
         }
 
+        if (System.Environment.TickCount64 < _layoutReadyAtMs)
+            return;
+
+        TakeLayoutSnapshot(screen);
     }
 
     internal static void CollectDwellTargets(List<DwellHoverService.Target> targets)
     {
-        if (_cachedHolders != null)
+        if (_confirmSnapshotTaken)
         {
-            int slot = 1;
-            foreach (var holder in _cachedHolders)
-            {
-                if (!NodeQuery.IsLive(holder))
-                {
-                    slot++;
-                    continue;
-                }
-
-                if (CardAnchorService.TryGetCardRect(holder, out var cardRect)
-                    && cardRect.Size.X >= 8f && cardRect.Size.Y >= 8f)
-                {
-                    var captured = holder;
-                    int capturedSlot = slot;
-                    // Menu timing (slower + cooldown) so a card pick is deliberate, not instant.
-                    targets.Add(DwellHoverService.Menu(
-                        cardRect,
-                        () => PileCardSelectionService.TrySelect(captured, capturedSlot),
-                        $"PileCard:{slot}"));
-                }
-
-                slot++;
-            }
+            CardConfirmPhaseQuery.CollectDwellTargets(targets);
+            return;
         }
 
-        if (_cachedConfirmButtons != null)
-        {
-            foreach (var button in _cachedConfirmButtons)
-            {
-                if (!NodeQuery.IsLive(button) || !NodeQuery.IsVisible(button))
-                    continue;
-                if (button is NClickableControl { IsEnabled: false })
-                    continue;
+        if (_cachedDwellTargets == null)
+            return;
 
-                if (ControlHitboxService.TryGetDwellRect(button, out var rect))
-                {
-                    var captured = button;
-                    targets.Add(DwellHoverService.Menu(
-                        rect,
-                        () => InputForwardService.TryActivateControl(captured),
-                        $"PileConfirm:{button.Name}"));
-                }
-            }
-        }
+        CardPickTargetQuery.AppendCachedPickTargets(_cachedDwellTargets, targets);
     }
 
     internal static void Hide()
     {
         _cachedScreen = null;
         _cachedHolders = null;
-        _cachedConfirmButtons = null;
-        _framesSinceCardScan = 0;
+        _cachedCardControls = null;
+        _cachedSkipControls = null;
+        _cachedDwellTargets = null;
+        _cachedScreenId = 0;
+        _layoutReadyAtMs = 0;
+        _proceedReadyAtMs = 0;
+        _proceedSettleScheduled = false;
+        _pickSnapshotTaken = false;
+        _proceedSnapshotTaken = false;
+        _confirmSnapshotTaken = false;
         _loggedButtonTypes = false;
+    }
+
+    private static void TakeConfirmSnapshot()
+    {
+        _cachedDwellTargets = null;
+        _confirmSnapshotTaken = true;
+        _pickSnapshotTaken = true;
+        ModLogger.Info("[Pile] confirm-only phase — card pick overlays suppressed.");
     }
 
     internal static bool TryRouteClick(Vector2 globalPos, out string message)
@@ -123,59 +146,139 @@ internal static class PileSelectOverlay
         return false;
     }
 
-    // Keep scene-tree order (stable across rescans).
-    private static List<NCardHolder> FindSelectableHolders(Node screen) =>
-        NodeQuery.FindAll<NCardHolder>(screen)
-            .Where(IsSelectableHolder)
-            .ToList();
-
-    // The post-selection Confirm / Skip / Proceed buttons on these screens are NButton/NClickableControl,
-    // so a ForceClick activates them (the "E" key does not work for the user's card-reward proceed).
-    private static List<Control> FindConfirmButtons(Node screen)
+    private static void ResetForScreen(Node screen, ulong screenId)
     {
-        var list = new List<Control>();
-
-        foreach (var b in NodeQuery.FindAll<NConfirmButton>(screen))
-            if (b is Control c && NodeQuery.IsVisible(c))
-                list.Add(c);
-
-        foreach (var b in NodeQuery.FindAll<NChoiceSelectionSkipButton>(screen))
-            if (b is Control c && NodeQuery.IsVisible(c))
-                list.Add(c);
-
-        foreach (var b in NodeQuery.FindAll<NProceedButton>(screen))
-            if (b is Control c && NodeQuery.IsVisible(c))
-                list.Add(c);
-
-        // The card-reward "Choose a Card" Skip is an NCardRewardAlternativeButton (no shared base we
-        // can reference here), so match it by type name and treat it as a skip/confirm target.
-        AddControlsByTypeName(screen, list, "NCardRewardAlternativeButton");
-
-        return list;
+        _cachedScreen = screen;
+        _cachedScreenId = screenId;
+        _cachedHolders = null;
+        _cachedCardControls = null;
+        _cachedSkipControls = null;
+        _cachedDwellTargets = null;
+        _pickSnapshotTaken = false;
+        _proceedSnapshotTaken = false;
+        _loggedButtonTypes = false;
+        _proceedReadyAtMs = 0;
+        _proceedSettleScheduled = false;
+        _layoutReadyAtMs = System.Environment.TickCount64 + LayoutSettleMs;
+        ModLogger.Info($"[Pile] waiting {LayoutSettleMs}ms for card fan-out before layout snapshot.");
     }
 
-    private static void AddControlsByTypeName(Node node, List<Control> list, string typeName)
+    /// <summary>True while the game is still offering pickable cards (not skip/proceed alone).</summary>
+    private static bool AreOfferedCardsStillVisible()
     {
-        if (!NodeQuery.IsLive(node))
+        if (_cachedHolders is { Count: > 0 })
+        {
+            foreach (var holder in _cachedHolders)
+            {
+                if (!NodeQuery.IsLive(holder) || !NodeQuery.IsVisible(holder))
+                    continue;
+
+                if (holder.CardModel != null)
+                    return true;
+            }
+        }
+
+        if (_cachedCardControls is { Count: > 0 })
+        {
+            foreach (var card in _cachedCardControls)
+            {
+                if (NodeQuery.IsLive(card) && NodeQuery.IsVisible(card))
+                    return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static void TryTakeProceedSnapshot()
+    {
+        var rewards = OverlayModeService.GetCachedRewardsScreen();
+        _cachedDwellTargets = ProceedTargetBuilder.TryBuildFromRewardsScreen(rewards);
+        if (_cachedDwellTargets is { Count: > 0 })
+        {
+            _proceedSnapshotTaken = true;
+            ModLogger.Info("[Pile] proceed snapshot after card pick.");
             return;
-
-        if (node is Control control
-            && node.GetType().Name == typeName
-            && NodeQuery.IsVisible(control)
-            && control is not NClickableControl { IsEnabled: false }
-            && !list.Contains(control))
-        {
-            list.Add(control);
         }
 
-        try
+        _cachedDwellTargets = null;
+    }
+
+    private static void TakeLayoutSnapshot(Node screen)
+    {
+        ScanPickTargets(screen, out _cachedHolders, out _cachedCardControls, out _cachedSkipControls);
+        _cachedDwellTargets = CardPickTargetQuery.BuildCachedPickTargets(
+            _cachedHolders is { Count: > 0 } ? _cachedHolders : null,
+            _cachedCardControls is { Count: > 0 } ? _cachedCardControls : null,
+            _cachedSkipControls);
+        _pickSnapshotTaken = true;
+        _proceedSnapshotTaken = false;
+
+        ModLogger.Info(
+            $"[Pile] layout snapshot — dwell targets={_cachedDwellTargets.Count} " +
+            $"holders={_cachedHolders?.Count ?? 0} cardControls={_cachedCardControls?.Count ?? 0} " +
+            $"skip={_cachedSkipControls?.Count ?? 0}");
+
+        if ((_cachedSkipControls?.Count ?? 0) == 0 && !_loggedButtonTypes)
         {
-            foreach (var child in node.GetChildren())
-                AddControlsByTypeName(child, list, typeName);
+            _loggedButtonTypes = true;
+            LogButtonLikeTypes(screen);
         }
-        catch
+    }
+
+    private static void ScanPickTargets(
+        Node screen,
+        out List<NCardHolder> holders,
+        out List<Control>? cardControls,
+        out List<Control>? skipControls)
+    {
+        holders = CardPickTargetQuery.FindHolders(screen);
+        if (holders.Count == 0)
         {
-            /* disposed mid-walk */
+            var rewards = OverlayModeService.GetCachedRewardsScreen();
+            if (rewards != null)
+                holders = CardPickTargetQuery.FindHolders(rewards);
+        }
+
+        if (holders.Count == 0)
+        {
+            var root = (Engine.GetMainLoop() as SceneTree)?.Root;
+            if (root != null)
+                holders = CardPickTargetQuery.FindHolders(root);
+        }
+
+        cardControls = null;
+        if (holders.Count == 0)
+        {
+            cardControls = CardPickTargetQuery.FindCardControls(screen);
+            if (cardControls.Count == 0)
+            {
+                var rewards = OverlayModeService.GetCachedRewardsScreen();
+                if (rewards != null)
+                    cardControls = CardPickTargetQuery.FindCardControls(rewards);
+            }
+
+            if (cardControls.Count == 0)
+            {
+                var root = (Engine.GetMainLoop() as SceneTree)?.Root;
+                if (root != null)
+                    cardControls = CardPickTargetQuery.FindCardControls(root);
+            }
+        }
+
+        skipControls = CardPickTargetQuery.FindSkipControls(screen);
+        if (skipControls.Count == 0)
+        {
+            var rewards = OverlayModeService.GetCachedRewardsScreen();
+            if (rewards != null)
+                skipControls = CardPickTargetQuery.FindSkipControls(rewards);
+        }
+
+        if (skipControls.Count == 0)
+        {
+            var root = (Engine.GetMainLoop() as SceneTree)?.Root;
+            if (root != null)
+                skipControls = CardPickTargetQuery.FindSkipControls(root);
         }
     }
 
@@ -183,7 +286,7 @@ internal static class PileSelectOverlay
     {
         var seen = new HashSet<string>();
         CollectButtonLikeTypes(screen, seen);
-        ModLogger.Info($"[Pile] no confirm/skip found. Button-like node types under {screen.GetType().Name}: {string.Join(", ", seen)}");
+        ModLogger.Info($"[Pile] button-like types={string.Join(", ", seen)}");
     }
 
     private static void CollectButtonLikeTypes(Node node, HashSet<string> seen)
@@ -195,7 +298,8 @@ internal static class PileSelectOverlay
         if (name.Contains("Button", StringComparison.Ordinal)
             || name.Contains("Skip", StringComparison.Ordinal)
             || name.Contains("Proceed", StringComparison.Ordinal)
-            || name.Contains("Confirm", StringComparison.Ordinal))
+            || name.Contains("Confirm", StringComparison.Ordinal)
+            || name.Contains("Card", StringComparison.Ordinal))
         {
             seen.Add(name);
         }
@@ -209,16 +313,5 @@ internal static class PileSelectOverlay
         {
             /* disposed mid-walk */
         }
-    }
-
-    private static bool IsSelectableHolder(NCardHolder holder)
-    {
-        if (!NodeQuery.IsLive(holder) || !NodeQuery.IsVisible(holder))
-            return false;
-        if (holder.CardModel == null)
-            return false;
-        if (!CardAnchorService.TryGetCardRect(holder, out var rect))
-            return false;
-        return rect.Size.X >= 60f && rect.Size.Y >= 80f;
     }
 }

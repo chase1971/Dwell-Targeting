@@ -3,7 +3,7 @@
   "name": "Dwell Targeting",
   "author": "Chase",
   "description": "Large target-number buttons above hand cards for dwell-click card play. Settings via ModConfig (Settings → Mods tab) or built-in SET/F8 fallback.",
-  "version": "0.10.56",
+  "version": "0.10.64",
   "has_pck": false,
   "has_dll": true,
   "affects_gameplay": true

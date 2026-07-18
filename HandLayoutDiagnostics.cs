@@ -33,10 +33,13 @@ internal static class HandLayoutDiagnostics
             if (card == null || !NodeQuery.IsVisible(holder))
                 continue;
 
-            CardAnchorService.TryGetCardRect(holder, out Rect2 rect);
+            if (!CardAnchorService.TryGetCardPlacement(holder, out var placement))
+                continue;
+
             ModLogger.Info(
                 $"  slot={i + 1} card={card.Id.Entry} holderPos=({holder.GlobalPosition.X:F0},{holder.GlobalPosition.Y:F0}) " +
-                $"rect=({rect.Position.X:F0},{rect.Position.Y:F0},{rect.Size.X:F0}x{rect.Size.Y:F0}) center=({rect.GetCenter().X:F0},{rect.GetCenter().Y:F0})");
+                $"rect=({placement.Bounds.Position.X:F0},{placement.Bounds.Position.Y:F0},{placement.Bounds.Size.X:F0}x{placement.Bounds.Size.Y:F0}) " +
+                $"anchor=({placement.ButtonAnchor.X:F0},{placement.ButtonAnchor.Y:F0})");
         }
     }
 

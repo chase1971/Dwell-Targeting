@@ -14,6 +14,10 @@ internal static class HandTargetingOverlay
     private static bool _hooked;
     private static bool _isTornDown = true;
     private static OverlayMode _activeOverlayMode = OverlayMode.None;
+    private static ulong _menuStateFrame;
+    private static bool _pauseMenuOpenThisFrame;
+    private static bool _blockingMenuOpenThisFrame;
+    private static bool _wasPauseMenuOpenForDwell;
 
     /// <summary>How a screen mode treats the left / hover scroll strips when it becomes active.</summary>
     private enum ScrollStripHide
@@ -76,7 +80,21 @@ internal static class HandTargetingOverlay
 
     internal static void CollectDwellTargets(List<DwellHoverService.Target> targets)
     {
-        if (GameOverlayVisibility.ShouldHideOverlays())
+        RefreshMenuStateThisFrame();
+
+        if (MainMenuOverlay.IsActive())
+        {
+            MainMenuOverlay.CollectDwellTargets(targets);
+            if (MainMenuOverlay.IsDialogOpen())
+                return;
+
+            if (!RunManager.Instance.IsInProgress)
+                return;
+        }
+
+        OverlayVisToggle.CollectDwellTargets(targets);
+
+        if (GameOverlayVisibility.ShouldHideOverlays(_blockingMenuOpenThisFrame))
             return;
 
         if (SettingsOverlay.IsOpen)
@@ -87,11 +105,18 @@ internal static class HandTargetingOverlay
 
         SettingsOverlay.TryAddGearTarget(targets);
 
+        MainMenuOverlay.CollectDwellTargets(targets);
+        CharacterSelectOverlay.CollectDwellTargets(targets);
+
         UtilityBarOverlay.CollectDwellTargets(targets);
+
+        PotionSlotOverlay.CollectDwellTargets(targets);
+        PotionPopupOverlay.CollectDwellTargets(targets);
 
         BackButtonOverlay.CollectDwellTargets(targets);
 
-        DeckViewOverlay.CollectDwellTargets(targets);
+        if (!CardConfirmPhaseQuery.IsActive())
+            DeckViewOverlay.CollectDwellTargets(targets);
 
         var confirm = ConfirmOverlay.GetDwellTarget();
         if (confirm != null)
@@ -101,6 +126,9 @@ internal static class HandTargetingOverlay
         if (endTurn != null)
             targets.Add(endTurn.Value);
 
+        EndTurnOverlay.CollectNativeDwellTargets(targets);
+        ConfirmOverlay.CollectNativeDwellTargets(targets);
+
         var mode = OverlayModeService.GetMode();
         if (ScreenOverlays.TryGetValue(mode, out var screen))
         {
@@ -108,8 +136,10 @@ internal static class HandTargetingOverlay
         }
         else
         {
-            PotionPopupOverlay.CollectDwellTargets(targets);
-            CombatRowsCoordinator.CollectDwellTargets(targets);
+            if (mode == OverlayMode.HandSelect)
+                HandSelectOverlay.CollectDwellTargets(targets);
+            else
+                CombatRowsCoordinator.CollectDwellTargets(targets);
         }
     }
 
@@ -118,6 +148,9 @@ internal static class HandTargetingOverlay
         message = string.Empty;
 
         if (SettingsOverlay.TryRouteClick(globalPos, out message))
+            return true;
+
+        if (OverlayVisToggle.TryRouteClick(globalPos, out message))
             return true;
 
         if (!OverlayModeService.IsHandOverlayActive())
@@ -200,16 +233,54 @@ internal static class HandTargetingOverlay
         return false;
     }
 
+    private static void RefreshMenuStateThisFrame()
+    {
+        ulong frame = Engine.GetProcessFrames();
+        if (_menuStateFrame == frame)
+            return;
+
+        _menuStateFrame = frame;
+        _pauseMenuOpenThisFrame = PauseMenuOverlay.IsOpen();
+        _blockingMenuOpenThisFrame = GameOverlayVisibility.ComputeBlockingMenuOpen(_pauseMenuOpenThisFrame);
+    }
+
+    private static void InvalidateDiscoveryCaches()
+    {
+        GameOverlayVisibility.InvalidateCache();
+        PauseMenuOverlay.InvalidateLookupCache();
+        UtilityBarOverlay.InvalidateDiscoveryCache();
+    }
+
     private static void OnProcessFrame()
     {
         long frameStart = OverlayPerfDiagnostics.BeginTick();
         try
         {
+            RefreshMenuStateThisFrame();
+
             SettingsOverlay.UpdateFrame();
+            OverlayVisToggle.UpdateFrame();
             ModManagerSettingsBridge.TryHydrateFromPersistedValues();
             SettingsStore.MaybeReload();
+            ModConfigScrollHarmonizer.Sync(_blockingMenuOpenThisFrame);
 
-            if (GameOverlayVisibility.ShouldHideOverlays())
+            if (_pauseMenuOpenThisFrame)
+            {
+                if (!_wasPauseMenuOpenForDwell)
+                    DwellHoverService.Reset();
+
+                _wasPauseMenuOpenForDwell = true;
+                SuppressDuringPause();
+                PauseMenuOverlay.Sync();
+                BackButtonOverlay.Sync();
+                FinalizePauseMenuDwellTargets();
+                return;
+            }
+
+            _wasPauseMenuOpenForDwell = false;
+            PauseMenuOverlay.Hide();
+
+            if (GameOverlayVisibility.ShouldHideOverlays(_blockingMenuOpenThisFrame))
             {
                 SuppressForMenu();
                 FinalizeDwellTargets();
@@ -221,13 +292,36 @@ internal static class HandTargetingOverlay
             OverlayPerfDiagnostics.AddCategory("getMode", getModeStart);
 
             bool showUtility = RunManager.Instance.IsInProgress;
-            UtilityBarOverlay.Sync(showUtility);
-            BackButtonOverlay.Sync();
+            bool showBackButton = showUtility
+                || MainMenuOverlay.IsActive()
+                || CharacterSelectOverlay.IsActive();
+            if (showBackButton)
+                BackButtonOverlay.Sync();
+            else
+                BackButtonOverlay.Hide();
 
             if (mode == OverlayMode.None)
             {
-                if (!_isTornDown)
-                    TearDown();
+                if (!showUtility && MainMenuOverlay.IsActive())
+                {
+                    _isTornDown = false;
+                    MainMenuOverlay.Sync();
+                    CharacterSelectOverlay.Hide();
+                }
+                else if (!showUtility && CharacterSelectOverlay.IsActive())
+                {
+                    _isTornDown = false;
+                    CharacterSelectOverlay.Sync();
+                    MainMenuOverlay.Hide();
+                }
+                else
+                {
+                    MainMenuOverlay.Hide();
+                    CharacterSelectOverlay.Hide();
+                    if (!_isTornDown)
+                        TearDown();
+                }
+
                 UtilityBarOverlay.Sync(showUtility);
                 if (showUtility)
                     OverlayCanvasHost.EnsureInputRouter();
@@ -235,14 +329,30 @@ internal static class HandTargetingOverlay
                 return;
             }
 
+            MainMenuOverlay.Hide();
+            CharacterSelectOverlay.Hide();
+            UtilityBarOverlay.Sync(showUtility);
+
             if (_activeOverlayMode != mode)
             {
                 ModLogger.Info($"[Mode] {_activeOverlayMode} -> {mode} ({OverlayModeService.DebugSnapshot()})");
 
                 // A selection screen just appeared — block accidental instant picks until the
-                // cursor settles and moves again.
-                if (ScreenOverlays.ContainsKey(mode))
+                // cursor settles and moves again. Skip when opening a card draft on top of loot
+                // so map/deck/pause utilities stay responsive.
+                if (ScreenOverlays.ContainsKey(mode)
+                    && !(mode == OverlayMode.PileSelect && _activeOverlayMode == OverlayMode.Rewards))
+                {
                     DwellHoverService.ArmGrace(1.0f);
+                }
+
+                if (mode == OverlayMode.HandSelect)
+                    ConfirmOverlay.RefreshNativeConfirmCache();
+                else if (mode == OverlayMode.CombatPlay)
+                    EndTurnOverlay.EnsureNativeEndTurnCached();
+
+                ViewScreenQuery.Invalidate();
+                InvalidateDiscoveryCaches();
 
                 _isTornDown = false;
                 _activeOverlayMode = mode;
@@ -254,7 +364,7 @@ internal static class HandTargetingOverlay
             // still in progress underneath, so suppress the combat overlay to stop its play buttons
             // bleeding through the viewed pile. The Back button stays available to close the view.
             if (mode is OverlayMode.CombatPlay or OverlayMode.HandSelect
-                && CombatViewSuppressionQuery.IsViewingScreenOpen())
+                && ViewScreenQuery.IsViewingScreenOpen())
             {
                 SuppressCombatForView();
                 FinalizeDwellTargets();
@@ -264,6 +374,8 @@ internal static class HandTargetingOverlay
             if (ScreenOverlays.TryGetValue(mode, out var screenOverlay))
             {
                 SyncScreenMode(screenOverlay);
+                PotionSlotOverlay.Sync();
+                PotionPopupOverlay.Sync();
                 FinalizeDwellTargets();
                 return;
             }
@@ -299,17 +411,28 @@ internal static class HandTargetingOverlay
             {
                 EndTurnOverlay.Hide();
                 EnemyLabelOverlay.Hide();
-                ConfirmOverlay.Sync(visible: true);
-                CombatRowsCoordinator.SyncHandSelect(hand, OverlayCanvasHost.FallbackRoot);
+                CombatRowsCoordinator.Clear();
+                if (CardConfirmPhaseQuery.IsActive())
+                {
+                    ConfirmOverlay.Hide();
+                    HandSelectOverlay.Hide();
+                }
+                else
+                {
+                    ConfirmOverlay.Sync(visible: true);
+                    HandSelectOverlay.Sync(hand);
+                }
             }
             else
             {
+                HandSelectOverlay.Hide();
                 ConfirmOverlay.Hide();
                 EndTurnOverlay.Sync(visible: true);
                 CombatRowsCoordinator.SyncCombatPlay(hand, OverlayCanvasHost.FallbackRoot);
             }
 
             long potionStart = OverlayPerfDiagnostics.BeginTick();
+            PotionSlotOverlay.Sync();
             PotionPopupOverlay.Sync();
             OverlayPerfDiagnostics.Add("potion.sync", potionStart);
 
@@ -323,6 +446,26 @@ internal static class HandTargetingOverlay
         }
     }
 
+    private static void FinalizePauseMenuDwellTargets()
+    {
+        long dwellStart = OverlayPerfDiagnostics.BeginTick();
+        try
+        {
+            var dwellTargets = new List<DwellHoverService.Target>();
+            OverlayVisToggle.CollectDwellTargets(dwellTargets);
+            SettingsOverlay.TryAddGearTarget(dwellTargets);
+            BackButtonOverlay.CollectDwellTargets(dwellTargets);
+            PauseMenuOverlay.CollectDwellTargets(dwellTargets);
+            PotionSlotOverlay.CollectDwellTargets(dwellTargets);
+            DwellDebugOverlay.Render(dwellTargets);
+            DwellHoverService.ProcessFrame(dwellTargets, GetProcessDelta());
+        }
+        finally
+        {
+            OverlayPerfDiagnostics.AddCategory("dwell", dwellStart);
+        }
+    }
+
     private static void FinalizeDwellTargets()
     {
         long dwellStart = OverlayPerfDiagnostics.BeginTick();
@@ -330,6 +473,7 @@ internal static class HandTargetingOverlay
         {
             // Run after mode-specific sync so map/shop handlers cannot hide deck scroll mid-frame.
             DeckViewOverlay.Sync();
+            ViewScrollOverlay.Sync();
 
             var dwellTargets = new List<DwellHoverService.Target>();
 
@@ -363,6 +507,7 @@ internal static class HandTargetingOverlay
     /// </summary>
     private static void SyncScreenMode(ScreenOverlay active)
     {
+        HandSelectOverlay.Hide();
         HandInputBlocker.Release();
         MouseCardPlayBlocker.Release();
         HandLayoutDiagnostics.Reset();
@@ -385,7 +530,7 @@ internal static class HandTargetingOverlay
                 break;
             case ScrollStripHide.ShopConditional:
                 LeftHoverScrollOverlay.Hide();
-                if (!CombatViewSuppressionQuery.IsDeckViewOpen())
+                if (!ViewScreenQuery.IsDeckViewOpen())
                     HoverScrollStripOverlay.Hide();
                 break;
         }
@@ -416,24 +561,51 @@ internal static class HandTargetingOverlay
         return tree?.Root?.GetProcessDeltaTime() ?? (1.0 / 60.0);
     }
 
-    private static void SuppressForMenu()
+    private static void SuppressDuringPause()
     {
-        DwellHoverService.Reset();
         HandInputBlocker.Release();
         MouseCardPlayBlocker.Release();
         EndTurnOverlay.Hide();
         ConfirmOverlay.Hide();
         UtilityBarOverlay.Hide();
         PotionPopupOverlay.Hide();
+        PotionSlotOverlay.Hide();
         EnemyLabelOverlay.Hide();
         MapOverlay.Hide();
         LeftHoverScrollOverlay.Hide();
-        HoverScrollStripOverlay.Hide();
+        ViewScrollOverlay.Hide();
+        DeckViewOverlay.Hide();
+        EventOverlay.Hide();
+        ShopOverlay.Hide();
+        RoomOverlay.Hide();
+        HandSelectOverlay.Hide();
+        CombatRowsCoordinator.Clear();
+        _isTornDown = true;
+        _activeOverlayMode = OverlayMode.None;
+    }
+
+    private static void SuppressForMenu()
+    {
+        HandInputBlocker.Release();
+        MouseCardPlayBlocker.Release();
+        EndTurnOverlay.Hide();
+        ConfirmOverlay.Hide();
+        UtilityBarOverlay.Hide();
+        PotionPopupOverlay.Hide();
+        PotionSlotOverlay.Hide();
+        EnemyLabelOverlay.Hide();
+        MapOverlay.Hide();
+        LeftHoverScrollOverlay.Hide();
+        ViewScrollOverlay.Hide();
         DeckViewOverlay.Hide();
         EventOverlay.Hide();
         ShopOverlay.Hide();
         RoomOverlay.Hide();
         BackButtonOverlay.Hide();
+        HandSelectOverlay.Hide();
+        PauseMenuOverlay.Hide();
+        MainMenuOverlay.Hide();
+        CharacterSelectOverlay.Hide();
         CombatRowsCoordinator.Clear();
         _isTornDown = true;
         _activeOverlayMode = OverlayMode.None;
@@ -452,13 +624,18 @@ internal static class HandTargetingOverlay
         PileSelectOverlay.Hide();
         MapOverlay.Hide();
         LeftHoverScrollOverlay.Hide();
-        HoverScrollStripOverlay.Hide();
+        ViewScrollOverlay.Hide();
         DeckViewOverlay.Hide();
         EventOverlay.Hide();
         ShopOverlay.Hide();
         RoomOverlay.Hide();
         BackButtonOverlay.Hide();
+        HandSelectOverlay.Hide();
+        PauseMenuOverlay.Hide();
+        MainMenuOverlay.Hide();
+        CharacterSelectOverlay.Hide();
         PotionPopupOverlay.Hide();
+        PotionSlotOverlay.Hide();
         EnemyLabelOverlay.Hide();
         CombatRowsCoordinator.Clear();
         _isTornDown = true;
