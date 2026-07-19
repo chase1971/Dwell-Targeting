@@ -5,23 +5,38 @@ using MegaCrit.Sts2.Core.Nodes.GodotExtensions;
 namespace DwellTargeting;
 
 /// <summary>
-/// Universal hover-to-activate for the game's Back button (<see cref="NBackButton"/>), which appears
-/// on many screens (card / deck / pile views, upgrade &amp; removal screens, shops, chests) and was
-/// never wired. Found once when it first appears; refound only if it disappears.
+/// Universal hover-to-activate for the game's Back button (<see cref="NBackButton"/>).
+/// Retries lookup on a short interval — never poisons absent forever on first miss.
 /// </summary>
 internal static class BackButtonOverlay
 {
     private const float BackButtonPadding = 10f;
+    private const long LookupRetryMs = 500;
 
     private static Control? _backButton;
+    private static long _lastLookupTick;
 
     internal static void Sync()
     {
         if (_backButton != null && NodeQuery.IsLive(_backButton) && NodeQuery.IsVisible(_backButton))
             return;
 
+        long now = System.Environment.TickCount64;
+        if (now - _lastLookupTick < LookupRetryMs)
+            return;
+
+        _lastLookupTick = now;
         _backButton = FindBackButton();
     }
+
+    internal static void InvalidateLookup()
+    {
+        _backButton = null;
+        _lastLookupTick = 0;
+    }
+
+    internal static bool HasTarget() =>
+        _backButton != null && NodeQuery.IsLive(_backButton) && NodeQuery.IsVisible(_backButton);
 
     internal static void CollectDwellTargets(List<DwellHoverService.Target> targets)
     {
@@ -40,7 +55,7 @@ internal static class BackButtonOverlay
 
     internal static void Hide()
     {
-        _backButton = null;
+        InvalidateLookup();
     }
 
     private static void Activate(Control button)
@@ -50,6 +65,7 @@ internal static class BackButtonOverlay
 
         ViewScreenQuery.Invalidate();
         DeckViewOverlay.NotifyClosed();
+        RoomOverlay.PrepareForEntry();
 
         if (InputForwardService.TryActivateControl(button))
             ModLogger.Info($"Back button '{button.Name}' activated.");

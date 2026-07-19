@@ -1,0 +1,1709 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dwell Targeting — Overlay Scan Map</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --surface: #1a2332;
+      --surface2: #243044;
+      --text: #e8eef4;
+      --muted: #8fa3b8;
+      --red: #ff6b6b;
+      --red-bg: rgba(255, 107, 107, 0.12);
+      --yellow: #ffd166;
+      --yellow-bg: rgba(255, 209, 102, 0.12);
+      --green: #6bcb77;
+      --green-bg: rgba(107, 203, 119, 0.12);
+      --gray: #8899aa;
+      --gray-bg: rgba(136, 153, 170, 0.1);
+      --accent: #5eb3ff;
+      --border: #2d3f54;
+      --font: "Segoe UI", system-ui, sans-serif;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html { font-size: 18px; scroll-behavior: smooth; }
+
+    body {
+      font-family: var(--font);
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+      padding-bottom: 4rem;
+    }
+
+    /* Sticky header + legend */
+    .sticky-top {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      background: rgba(15, 20, 25, 0.97);
+      border-bottom: 2px solid var(--border);
+      backdrop-filter: blur(8px);
+    }
+
+    header {
+      padding: 1rem 1.5rem 0.5rem;
+    }
+
+    header h1 {
+      font-size: 1.6rem;
+      font-weight: 700;
+      color: var(--accent);
+    }
+
+    header p {
+      font-size: 1rem;
+      color: var(--muted);
+      margin-top: 0.25rem;
+    }
+
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem 1.5rem;
+      padding: 0.75rem 1.5rem 1rem;
+      font-size: 0.95rem;
+    }
+
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+    }
+
+    .dot {
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+
+    .dot-red { background: var(--red); }
+    .dot-yellow { background: var(--yellow); }
+    .dot-green { background: var(--green); }
+    .dot-gray { background: var(--gray); }
+
+    /* Category nav */
+    nav.categories {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      padding: 0 1.5rem 1rem;
+    }
+
+    nav.categories a {
+      display: inline-block;
+      padding: 0.45rem 0.85rem;
+      background: var(--surface);
+      color: var(--accent);
+      text-decoration: none;
+      border-radius: 8px;
+      font-size: 0.95rem;
+      font-weight: 600;
+      border: 1px solid var(--border);
+    }
+
+    nav.categories a:hover {
+      background: var(--surface2);
+    }
+
+    main {
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 1.5rem;
+    }
+
+    section {
+      margin-bottom: 2.5rem;
+    }
+
+    section > h2 {
+      font-size: 1.35rem;
+      color: var(--accent);
+      margin-bottom: 0.5rem;
+      padding-bottom: 0.35rem;
+      border-bottom: 2px solid var(--border);
+    }
+
+    section > .section-desc {
+      color: var(--muted);
+      font-size: 1rem;
+      margin-bottom: 1.25rem;
+    }
+
+    /* Pipeline diagram */
+    .pipeline {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.25rem;
+      margin-bottom: 2rem;
+      overflow-x: auto;
+    }
+
+    .pipeline h3 {
+      font-size: 1.1rem;
+      margin-bottom: 1rem;
+      color: var(--text);
+    }
+
+    .flow {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+      min-width: 320px;
+    }
+
+    .flow-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .flow-box {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.6rem 0.9rem;
+      font-size: 0.9rem;
+      max-width: 100%;
+    }
+
+    .flow-box.highlight { border-color: var(--yellow); }
+    .flow-box.danger { border-color: var(--red); }
+
+    .flow-arrow {
+      color: var(--muted);
+      font-size: 1.2rem;
+      text-align: center;
+    }
+
+    .flow-branch {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.75rem;
+      margin-left: 1rem;
+    }
+
+    @media (max-width: 700px) {
+      .flow-branch { grid-template-columns: 1fr; }
+    }
+
+    /* Screen zone schematic */
+    .screen-zone {
+      width: 100%;
+      max-width: 200px;
+      aspect-ratio: 16/9;
+      background: #0a0e12;
+      border: 2px solid var(--border);
+      border-radius: 6px;
+      position: relative;
+      margin-top: 0.5rem;
+    }
+
+    .zone {
+      position: absolute;
+      border: 1px dashed rgba(94, 179, 255, 0.6);
+      background: rgba(94, 179, 255, 0.08);
+      font-size: 0.55rem;
+      color: var(--accent);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 2px;
+      line-height: 1.1;
+    }
+
+    .zone-top { top: 2%; left: 5%; right: 5%; height: 12%; }
+    .zone-topleft { top: 2%; left: 2%; width: 28%; height: 14%; }
+    .zone-topright { top: 2%; right: 2%; width: 28%; height: 14%; }
+    .zone-center { top: 30%; left: 20%; right: 20%; height: 35%; }
+    .zone-bottom { bottom: 8%; left: 10%; right: 10%; height: 22%; }
+    .zone-bottomright { bottom: 8%; right: 2%; width: 22%; height: 18%; }
+    .zone-left { top: 25%; left: 2%; width: 12%; height: 50%; }
+    .zone-full { inset: 5%; }
+
+    /* Overlay cards grid */
+    .card-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+      gap: 1rem;
+    }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1rem 1.1rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+
+    .card.risk-red { border-left: 4px solid var(--red); background: linear-gradient(90deg, var(--red-bg), var(--surface)); }
+    .card.risk-yellow { border-left: 4px solid var(--yellow); background: linear-gradient(90deg, var(--yellow-bg), var(--surface)); }
+    .card.risk-green { border-left: 4px solid var(--green); }
+    .card.risk-gray { border-left: 4px solid var(--gray); opacity: 0.92; }
+
+    .card-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 0.5rem;
+    }
+
+    .card-header h3 {
+      font-size: 1.05rem;
+      font-weight: 700;
+      word-break: break-word;
+    }
+
+    .badge {
+      font-size: 0.75rem;
+      font-weight: 700;
+      padding: 0.2rem 0.5rem;
+      border-radius: 6px;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    .badge-red { background: var(--red-bg); color: var(--red); }
+    .badge-yellow { background: var(--yellow-bg); color: var(--yellow); }
+    .badge-green { background: var(--green-bg); color: var(--green); }
+    .badge-gray { background: var(--gray-bg); color: var(--gray); }
+
+    .card-meta {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 0.15rem 0.75rem;
+      font-size: 0.88rem;
+    }
+
+    .card-meta dt {
+      color: var(--muted);
+      font-weight: 600;
+    }
+
+    .card-meta dd { margin: 0; }
+
+    .card-appears {
+      font-size: 0.9rem;
+      color: var(--text);
+    }
+
+    .card-risk-note {
+      font-size: 0.85rem;
+      color: var(--muted);
+      padding-top: 0.35rem;
+      border-top: 1px solid var(--border);
+    }
+
+    .card-risk-note strong { color: var(--text); }
+
+    .card-body-row {
+      display: flex;
+      gap: 1rem;
+      align-items: flex-start;
+    }
+
+    .card-text { flex: 1; min-width: 0; }
+
+    /* Flagged panel */
+    .flagged-panel {
+      background: var(--surface);
+      border: 2px solid var(--red);
+      border-radius: 12px;
+      padding: 1.25rem;
+      margin-top: 2rem;
+    }
+
+    .flagged-panel h2 {
+      color: var(--red);
+      font-size: 1.25rem;
+      margin-bottom: 1rem;
+      border: none;
+      padding: 0;
+    }
+
+    .flagged-list {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+
+    .flagged-list li {
+      background: var(--surface2);
+      border-radius: 8px;
+      padding: 0.85rem 1rem;
+      border-left: 4px solid var(--yellow);
+    }
+
+    .flagged-list li.rank-red { border-left-color: var(--red); }
+
+    .flagged-list li strong {
+      display: block;
+      font-size: 1rem;
+      margin-bottom: 0.35rem;
+    }
+
+    .flagged-list .current { color: var(--muted); font-size: 0.9rem; }
+    .flagged-list .ideal { color: var(--green); font-size: 0.9rem; margin-top: 0.25rem; }
+
+    /* Teaching callout */
+    .callout {
+      background: var(--surface2);
+      border: 1px solid var(--accent);
+      border-radius: 10px;
+      padding: 1rem 1.25rem;
+      margin-bottom: 2rem;
+      font-size: 1rem;
+    }
+
+    .callout strong { color: var(--accent); }
+
+    /* Print */
+    @media print {
+      .sticky-top { position: static; }
+      body { background: white; color: black; font-size: 12pt; }
+      .card { break-inside: avoid; border: 1px solid #ccc; }
+      nav.categories { display: none; }
+    }
+
+    @media (min-width: 900px) {
+      html { font-size: 19px; }
+    }
+
+    /* Scan Load dashboard */
+    .scan-load-panel {
+      background: var(--surface);
+      border: 2px solid var(--accent);
+      border-radius: 12px;
+      padding: 1.25rem 1.5rem;
+      margin-bottom: 2rem;
+    }
+
+    .scan-load-panel h2 {
+      font-size: 1.25rem;
+      color: var(--accent);
+      margin-bottom: 0.75rem;
+      border: none;
+      padding: 0;
+    }
+
+    .scan-load-formula {
+      background: var(--surface2);
+      border-radius: 8px;
+      padding: 0.85rem 1rem;
+      font-size: 0.92rem;
+      margin-bottom: 1rem;
+      line-height: 1.6;
+    }
+
+    .scan-load-formula code {
+      background: var(--bg);
+      padding: 0.1rem 0.35rem;
+      border-radius: 4px;
+      font-size: 0.88rem;
+    }
+
+    .scenario-tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      margin-bottom: 1rem;
+    }
+
+    .scenario-tabs button {
+      padding: 0.5rem 1rem;
+      font-size: 0.95rem;
+      font-weight: 600;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--surface2);
+      color: var(--text);
+      cursor: pointer;
+    }
+
+    .scenario-tabs button:hover { background: var(--border); }
+    .scenario-tabs button.active {
+      background: var(--accent);
+      color: var(--bg);
+      border-color: var(--accent);
+    }
+
+    .scan-total-display {
+      text-align: center;
+      padding: 1rem;
+      margin-bottom: 1rem;
+      background: var(--bg);
+      border-radius: 10px;
+    }
+
+    .scan-total-display .label {
+      font-size: 0.95rem;
+      color: var(--muted);
+      margin-bottom: 0.25rem;
+    }
+
+    .scan-total-display .value {
+      font-size: 2.8rem;
+      font-weight: 800;
+      color: var(--accent);
+      line-height: 1.1;
+    }
+
+    .scan-total-display .value.high { color: var(--red); }
+    .scan-total-display .value.mid { color: var(--yellow); }
+    .scan-total-display .value.low { color: var(--green); }
+
+    .scan-total-display .hint {
+      font-size: 0.85rem;
+      color: var(--muted);
+      margin-top: 0.5rem;
+    }
+
+    .scan-breakdown {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.88rem;
+    }
+
+    .scan-breakdown th,
+    .scan-breakdown td {
+      padding: 0.4rem 0.6rem;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .scan-breakdown th { color: var(--muted); font-weight: 600; }
+    .scan-breakdown td.num { text-align: right; font-variant-numeric: tabular-nums; }
+    .scan-breakdown tr:hover { background: var(--surface2); }
+    .scan-breakdown .row-zero { opacity: 0.45; }
+
+    .scan-load-badge {
+      font-size: 0.72rem;
+      font-weight: 700;
+      padding: 0.15rem 0.45rem;
+      border-radius: 5px;
+      background: rgba(94, 179, 255, 0.15);
+      color: var(--accent);
+      white-space: nowrap;
+    }
+
+    .alt-metric {
+      margin-top: 1rem;
+      padding-top: 1rem;
+      border-top: 1px solid var(--border);
+      font-size: 0.88rem;
+      color: var(--muted);
+    }
+  </style>
+</head>
+<body>
+
+<div class="sticky-top">
+  <header>
+    <h1>Dwell Targeting — Overlay Scan Map</h1>
+    <p>Every overlay, when it scans, how often, and infinite-loop-scan risk. Updated after event-driven scan pass (Jul 2026).</p>
+  </header>
+  <div class="legend">
+    <div class="legend-item"><span class="dot dot-red"></span> <strong>RED</strong> — full-root walk every frame (or every frame when absent, no negative cache)</div>
+    <div class="legend-item"><span class="dot dot-yellow"></span> <strong>YELLOW</strong> — timer walk, root on gated rebuild, or scoped per-frame walk</div>
+    <div class="legend-item"><span class="dot dot-green"></span> <strong>GREEN</strong> — cached-by-id or event-driven; walks rarely</div>
+    <div class="legend-item"><span class="dot dot-gray"></span> <strong>GRAY</strong> — no scene-tree scan (activation / geometry only)</div>
+  </div>
+  <nav class="categories">
+    <a href="#scan-load">Scan Load</a>
+    <a href="#pipeline">Pipeline</a>
+    <a href="#infra">Infrastructure</a>
+    <a href="#global">Global / Always-on</a>
+    <a href="#menu">Menu / Pre-run</a>
+    <a href="#screen">Screen-mode</a>
+    <a href="#potions">Potions</a>
+    <a href="#combat">Combat</a>
+    <a href="#services">Services</a>
+    <a href="#flagged">Flagged for review</a>
+  </nav>
+</div>
+
+<main>
+
+  <div class="callout">
+    <strong>Key idea:</strong> Frame cost ≈ how many <code>NodeQuery.FindAll</code> walks hit the <strong>scene root</strong> per frame.
+    Each node visit crosses C#↔Godot (<code>GetChildren</code>). Static screens should scan <strong>once on entry</strong> + <strong>once when something changes</strong> (choice made, chest opened), not on a timer every 250–1000&nbsp;ms.
+  </div>
+
+  <div class="callout" style="border-color: var(--yellow); background: var(--yellow-bg); margin-top: -0.5rem;">
+    <strong>Jul 2026 testing — what Scan Load can miss:</strong>
+    <ul style="margin: 0.5rem 0 0 1.25rem; font-size: 0.95rem;">
+      <li><strong>Duplicate call sites</strong> — same ROOT walk invoked 3–5× per frame from different guards (<code>MainMenuOverlay.IsActive()</code> is the worst offender). Multiply single-overlay load by call count.</li>
+      <li><strong>Pre-gate walks</strong> — a 250&nbsp;ms throttle on <em>rebuild</em> does nothing if <em>detection</em> (<code>FindMainMenu</code>, <code>ComputeLayoutKey</code>) runs every frame anyway. RoomOverlay had this bug; MainMenuOverlay still does.</li>
+      <li><strong>Timer invalidation chains</strong> — <code>GetMode()</code> every 250&nbsp;ms used to invalidate <code>ViewScreenQuery</code>, forcing a second ROOT walk. Fixed for stable screens via <code>IsCachedModeStillValid()</code>.</li>
+      <li><strong>Non-scan FPS cost</strong> — <code>DwellDebugOverlay</code> (green hitbox render) costs frames but scores 0 Scan Load. Toggle off to isolate tree-walk cost.</li>
+      <li><strong>Pause fast path</strong> — Escape menu skips <code>GetMode</code> + full <code>CollectDwellTargets</code>; observed ~60&nbsp;FPS even when title menu (~150k load) runs ~30–40.</li>
+    </ul>
+  </div>
+
+  <section id="scan-load" class="scan-load-panel">
+    <h2>Scan Load score — chip-away metric (5 seconds)</h2>
+    <div class="scan-load-formula">
+      <strong>Formula:</strong>
+      <code>Load = scans_in_5s × tree_walks_per_fire × scope_points × call_mult</code><br><br>
+      <strong>scans_in_5s:</strong> at 250&nbsp;ms interval → 5000÷250 = <strong>20</strong> scans.
+      At 500&nbsp;ms → <strong>10</strong>. Every frame (60&nbsp;FPS) → <strong>~300</strong>.
+      <strong>stable</strong> (screen unchanged) → <strong>0</strong> additional scans.<br>
+      <strong>scope_points:</strong> ROOT full-tree = <strong>100</strong>, SCOPED subtree = <strong>5</strong>, none = <strong>0</strong>.<br>
+      <strong>call_mult:</strong> how many times the same walk fires per frame from different call sites (default 1). Title menu <code>FindMainMenu</code> ≈ <strong>4×</strong>.<br>
+      <strong>Example:</strong> ROOT walk every 250&nbsp;ms, 1 walk → 20 × 1 × 100 = <strong>2,000</strong>.
+      Scan <strong>once on room entry</strong> → 1 × 3 × 100 = <strong>300</strong>, then <strong>0</strong> until chest clicked.<br>
+      <strong>Observed Jul 2026:</strong> Treasure room steady ~60&nbsp;FPS (~3.5k load). Card-grid upgrade was ~30&nbsp;FPS at ~105k+ <em>real</em> load (CardConfirm ROOT ×2/frame + ViewScroll WalkForCardGrid) despite chart showing ~35k. Title menu ~30–40&nbsp;FPS at ~150k+ (MainMenu pre-gate). Pause menu ~60&nbsp;FPS (~2k).<br><br>
+      This is <em>not</em> milliseconds or FPS — it's a relative score so you can say "treasure room was 105k, now ~3.5k after fixes." Lower is better. Sum only overlays active in each scenario.
+    </div>
+    <div class="scenario-tabs" id="scenario-tabs"></div>
+    <div class="scan-total-display">
+      <div class="label">Total Scan Load (5s, this scenario)</div>
+      <div class="value" id="scan-total-value">—</div>
+      <div class="hint" id="scan-total-hint"></div>
+    </div>
+    <table class="scan-breakdown">
+      <thead>
+        <tr>
+          <th>Overlay</th>
+          <th>Interval</th>
+          <th>Walks</th>
+          <th>Scope</th>
+          <th class="num">Load (5s)</th>
+        </tr>
+      </thead>
+      <tbody id="scan-breakdown-body"></tbody>
+    </table>
+    <div class="alt-metric">
+      <strong>Ground truth (optional):</strong> With Performance Logging on, check <code>dwell-targeting.log</code> —
+      <code>tree.findAllCalls × 300 × 100</code> ≈ observed ROOT-weighted load over 5s at 60&nbsp;FPS.
+      Use Scan Load for planning; use the log to verify after changes.
+    </div>
+  </section>
+
+  <section id="pipeline" class="pipeline">
+    <h3>Per-frame pipeline (HandTargetingOverlay.OnProcessFrame)</h3>
+    <div class="flow">
+      <div class="flow-box">OnProcessFrame — every frame (~60 Hz)</div>
+      <div class="flow-arrow">↓</div>
+      <div class="flow-box">RefreshMenuState — PauseMenu.IsOpen (500ms throttle) + GameOverlayVisibility blocking menus (500ms)</div>
+      <div class="flow-arrow">↓</div>
+      <div class="flow-box">UpdateFrame — SettingsOverlay, OverlayVisToggle, ModConfigScrollHarmonizer</div>
+      <div class="flow-arrow">↓</div>
+      <div class="flow-box highlight">OverlayModeService.GetMode() — frame-cached; <strong>stable screens skip 250ms re-walk</strong> when cached node still valid (Jul 2026). In combat, refresh on state-key change only.</div>
+      <div class="flow-arrow">↓</div>
+      <div class="flow-branch">
+        <div class="flow-box"><strong>Pause open</strong> — short path: PauseMenu + Back + gear only (~60 FPS observed)</div>
+        <div class="flow-box"><strong>Settings blocking</strong> — SuppressForMenu + empty dwell (no Finalize scans)</div>
+      </div>
+      <div class="flow-arrow">↓</div>
+      <div class="flow-branch">
+        <div class="flow-box">Screen mode .Sync() — Rewards / PileSelect / Map / Event / Shop / Room</div>
+        <div class="flow-box">Combat path — HandSelect / CombatRows / EndTurn / Confirm</div>
+      </div>
+      <div class="flow-arrow">↓</div>
+      <div class="flow-box">FinalizeDwellTargets → DeckView + ViewScroll (cached) → CollectDwellTargets → ProcessFrame</div>
+      <div class="flow-arrow">↓</div>
+      <div class="flow-box">CardConfirmPhaseQuery — <strong>cached per screen</strong> (scoped walk once). Mode early-exit on Room/Map/Event/Shop. <strong>RED remaining:</strong> MainMenuOverlay pre-gate FindMainMenu.</div>
+    </div>
+  </section>
+
+  <!-- INFRASTRUCTURE -->
+  <section id="infra">
+    <h2>Shared scanning infrastructure</h2>
+    <p class="section-desc">Behind-the-scenes systems that decide which mode is active and whether overlays should hide. These drive a lot of total scan cost.</p>
+    <div class="card-grid">
+
+      <article class="card risk-yellow">
+        <div class="card-header">
+          <h3>OverlayModeService</h3>
+          <span class="badge badge-yellow">YELLOW</span>
+        </div>
+        <div class="card-body-row">
+          <div class="card-text">
+            <dl class="card-meta">
+              <dt>Trigger</dt><dd>Throttled timer + state-key cache</dd>
+              <dt>Scan rate</dt><dd>250ms out of combat; in-combat on key change only</dd>
+              <dt>Walk scope</dt><dd><strong>ROOT</strong> — full ScanTree on refresh</dd>
+              <dt>File</dt><dd>OverlayModeService.cs</dd>
+            </dl>
+            <p class="card-appears"><strong>When:</strong> Every frame (cached per frame); decides Rewards / Map / Event / Shop / Room / Combat mode.</p>
+            <p class="card-risk-note"><strong>Jul 2026:</strong> <code>IsCachedModeStillValid()</code> skips 250ms <code>ScanTree</code> on static PileSelect / Room / Map when screen node still live. Still re-walks on mode-key change or dead cache.</p>
+          </div>
+          <div class="screen-zone"><div class="zone zone-full">All screens</div></div>
+        </div>
+      </article>
+
+      <article class="card risk-yellow">
+        <div class="card-header">
+          <h3>GameOverlayVisibility</h3>
+          <span class="badge badge-yellow">YELLOW</span>
+        </div>
+        <div class="card-body-row">
+          <div class="card-text">
+            <dl class="card-meta">
+              <dt>Trigger</dt><dd>Throttled timer + cached node list</dd>
+              <dt>Scan rate</dt><dd>500ms (RescanIntervalMs)</dd>
+              <dt>Walk scope</dt><dd><strong>ROOT</strong> — CollectBlockingNodes</dd>
+              <dt>File</dt><dd>GameOverlayVisibility.cs</dd>
+            </dl>
+            <p class="card-appears"><strong>When:</strong> Every frame visibility check; full walk at most every 500ms when HideOverlaysInMenus enabled.</p>
+            <p class="card-risk-note"><strong>Risk:</strong> Periodic root walk; visibility-only between rescans.</p>
+          </div>
+          <div class="screen-zone"><div class="zone zone-full">Settings / pause</div></div>
+        </div>
+      </article>
+
+      <article class="card risk-green">
+        <div class="card-header">
+          <h3>ViewScreenQuery + CombatViewSuppressionQuery</h3>
+          <span class="badge badge-green">GREEN</span>
+        </div>
+        <div class="card-body-row">
+          <div class="card-text">
+            <dl class="card-meta">
+              <dt>Trigger</dt><dd>Event / request-driven (_scanPending)</dd>
+              <dt>Scan rate</dt><dd>On mode change, utility open, back close — not timer</dd>
+              <dt>Walk scope</dt><dd><strong>ROOT</strong> — only when pending</dd>
+              <dt>File</dt><dd>ViewScreenQuery.cs, CombatViewSuppressionQuery.cs</dd>
+            </dl>
+            <p class="card-appears"><strong>When:</strong> Deck/draw/discard/exhaust pile or map opened on top of combat — suppresses combat overlay.</p>
+            <p class="card-risk-note"><strong>Risk:</strong> Good pattern — scan once per open/close, not every frame.</p>
+          </div>
+          <div class="screen-zone"><div class="zone zone-center">Pile / deck view</div></div>
+        </div>
+      </article>
+
+      <article class="card risk-gray">
+        <div class="card-header">
+          <h3>NodeQuery.FindAll / ScanInterval / OverlayPerfDiagnostics</h3>
+          <span class="badge badge-gray">GRAY</span>
+        </div>
+        <div class="card-body-row">
+          <div class="card-text">
+            <dl class="card-meta">
+              <dt>Trigger</dt><dd>Called by overlays — not autonomous</dd>
+              <dt>Scan rate</dt><dd>ScanInterval.Frames() default ~45 frames (settings)</dd>
+              <dt>Walk scope</dt><dd>Whatever caller passes (root or scoped)</dd>
+              <dt>File</dt><dd>NodeQuery.cs, ScanInterval.cs, OverlayPerfDiagnostics.cs</dd>
+            </dl>
+            <p class="card-appears"><strong>When:</strong> Primitive for all tree walks; perf log counts tree.findAllCalls and tree.nodesVisited per frame.</p>
+            <p class="card-risk-note"><strong>Reference:</strong> Enable Performance Logging in settings to see ms/frame breakdown in dwell-targeting.log.</p>
+          </div>
+        </div>
+      </article>
+
+    </div>
+  </section>
+
+  <!-- GLOBAL -->
+  <section id="global">
+    <h2>Global / always-on</h2>
+    <p class="section-desc">Run on most screens during a run — even when their targets are absent.</p>
+    <div class="card-grid">
+
+      <article class="card risk-green">
+        <div class="card-header">
+          <h3>ViewScrollOverlay</h3>
+          <span class="badge badge-green">GREEN</span>
+        </div>
+        <div class="card-body-row">
+          <div class="card-text">
+            <dl class="card-meta">
+              <dt>Trigger</dt><dd>Per-frame Sync — <strong>no tree walk</strong></dd>
+              <dt>Scan rate</dt><dd>Every frame (scroll hover logic only)</dd>
+              <dt>Walk scope</dt><dd><strong>NONE</strong> — uses cached PileSelect screen + ViewScreenQuery</dd>
+              <dt>File</dt><dd>ViewScrollOverlay.cs</dd>
+            </dl>
+            <p class="card-appears"><strong>When:</strong> Scrollable card grids (upgrade picker, choose-a-card) and deck/pile views — ▲/▼ hover scroll strips.</p>
+            <p class="card-risk-note"><strong>Fixed Jul 2026 (pm):</strong> Removed <code>WalkForCardGrid</code> ROOT recursion every frame. Was ~30k load alone; caused ~30 FPS on upgrade grid despite chart showing ~35k total.</p>
+          </div>
+          <div class="screen-zone"><div class="zone zone-left">Scroll strips</div><div class="zone zone-center">Card grid</div></div>
+        </div>
+      </article>
+
+      <article class="card risk-yellow">
+        <div class="card-header">
+          <h3>SettingsOverlay</h3>
+          <span class="badge badge-yellow">YELLOW</span>
+        </div>
+        <div class="card-body-row">
+          <div class="card-text">
+            <dl class="card-meta">
+              <dt>Trigger</dt><dd>Per-frame when panel open</dd>
+              <dt>Scan rate</dt><dd>Every frame (UpdateFrame)</dd>
+              <dt>Walk scope</dt><dd><strong>SCOPED</strong> — FindAll on mod panel only</dd>
+              <dt>File</dt><dd>SettingsOverlay.cs</dd>
+            </dl>
+            <p class="card-appears"><strong>When:</strong> SET button / F8 settings panel — gear, close, adjust buttons.</p>
+            <p class="card-risk-note"><strong>Risk:</strong> Per-frame scoped walk; bounded to small mod-owned subtree.</p>
+          </div>
+          <div class="screen-zone"><div class="zone zone-topleft">SET panel</div></div>
+        </div>
+      </article>
+
+      <article class="card risk-green">
+        <div class="card-header">
+          <h3>UtilityBarOverlay</h3>
+          <span class="badge badge-green">GREEN</span>
+        </div>
+        <div class="card-body-row">
+          <div class="card-text">
+            <dl class="card-meta">
+              <dt>Trigger</dt><dd>Cached-by-id — one-shot lookup</dd>
+              <dt>Scan rate</dt><dd>Once per run; invalidate when settings close</dd>
+              <dt>Walk scope</dt><dd><strong>ROOT</strong> once for NTopBar; combat piles only in combat modes</dd>
+              <dt>File</dt><dd>UtilityBarOverlay.cs</dd>
+            </dl>
+            <p class="card-appears"><strong>When:</strong> Run in progress — draw / discard / deck / exhaust / map / pause (NativeUtility:* labels).</p>
+            <p class="card-risk-note"><strong>Fixed Jul 2026:</strong> No 500ms re-scan timer. Top bar found once; rects cached until InvalidateDiscoveryCache().</p>
+          </div>
+          <div class="screen-zone"><div class="zone zone-top">Top bar utilities</div></div>
+        </div>
+      </article>
+
+      <article class="card risk-green">
+        <div class="card-header">
+          <h3>BackButtonOverlay</h3>
+          <span class="badge badge-green">GREEN</span>
+        </div>
+        <div class="card-body-row">
+          <div class="card-text">
+            <dl class="card-meta">
+              <dt>Trigger</dt><dd>One-shot + absent confirmed</dd>
+              <dt>Scan rate</dt><dd>Once when a view opens; zero on screens without Back</dd>
+              <dt>Walk scope</dt><dd><strong>ROOT</strong> — single FindBackButton</dd>
+              <dt>File</dt><dd>BackButtonOverlay.cs</dd>
+            </dl>
+            <p class="card-appears"><strong>When:</strong> Card/deck/pile views — game's Back button. <strong>Not</strong> on treasure room or map.</p>
+            <p class="card-risk-note"><strong>Fixed Jul 2026:</strong> _absentConfirmed — no repeated root walks when Back isn't on screen. InvalidateLookup on ViewScreenQuery.RequestScan().</p>
+          </div>
+          <div class="screen-zone"><div class="zone zone-topright">Back</div></div>
+        </div>
+      </article>
+
+      <article class="card risk-green">
+        <div class="card-header">
+          <h3>ModConfigScrollHarmonizer</h3>
+          <span class="badge badge-green">GREEN</span>
+        </div>
+        <div class="card-body-row">
+          <div class="card-text">
+            <dl class="card-meta">
+              <dt>Trigger</dt><dd>One-shot + instance-id gate</dd>
+              <dt>Scan rate</dt><dd>Once per settings-open cycle</dd>
+              <dt>Walk scope</dt><dd><strong>ROOT</strong> — single Walk()</dd>
+              <dt>File</dt><dd>ModConfigScrollHarmonizer.cs</dd>
+            </dl>
+            <p class="card-appears"><strong>When:</strong> ModConfig / settings open — disables nested scrollbars.</p>
+            <p class="card-risk-note"><strong>Risk:</strong> One root walk then no-ops via _harmonized set.</p>
+          </div>
+        </div>
+      </article>
+
+      <article class="card risk-green">
+        <div class="card-header">
+          <h3>OverlayVisToggle</h3>
+          <span class="badge badge-green">GREEN</span>
+        </div>
+        <div class="card-body-row">
+          <div class="card-text">
+            <dl class="card-meta">
+              <dt>Trigger</dt><dd>Cached position — no tree walk</dd>
+              <dt>Scan rate</dt><dd>None</dd>
+              <dt>Walk scope</dt><dd>None — uses UtilityBarOverlay rect cache</dd>
+              <dt>File</dt><dd>OverlayVisToggle.cs</dd>
+            </dl>
+            <p class="card-appears"><strong>When:</strong> Always during run — eye icon toggles overlay visibility (OverlayVisToggle label).</p>
+          </div>
+          <div class="screen-zone"><div class="zone zone-topright">Eye toggle</div></div>
+        </div>
+      </article>
+
+      <article class="card risk-green">
+        <div class="card-header">
+          <h3>HoverScrollStripOverlay</h3>
+          <span class="badge badge-green">GREEN</span>
+        </div>
+        <div class="card-body-row">
+          <div class="card-text">
+            <dl class="card-meta">
+              <dt>Trigger</dt><dd>No scan — owned UI nodes</dd>
+              <dt>Scan rate</dt><dd>None</dd>
+              <dt>Walk scope</dt><dd>None</dd>
+              <dt>File</dt><dd>HoverScrollStripOverlay.cs</dd>
+            </dl>
+            <p class="card-appears"><strong>When:</strong> Delegated from ViewScrollOverlay — ▲/▼ scroll arrows on scrollable views.</p>
+          </div>
+        </div>
+      </article>
+
+      <article class="card risk-green">
+        <div class="card-header">
+          <h3>LeftHoverScrollOverlay</h3>
+          <span class="badge badge-green">GREEN</span>
+        </div>
+        <div class="card-body-row">
+          <div class="card-text">
+            <dl class="card-meta">
+              <dt>Trigger</dt><dd>Dormant — Hide() only wired</dd>
+              <dt>Scan rate</dt><dd>N/A</dd>
+              <dt>Walk scope</dt><dd>None</dd>
+              <dt>File</dt><dd>LeftHoverScrollOverlay.cs</dd>
+            </dl>
+            <p class="card-appears"><strong>When:</strong> Legacy dual-strip scroll — not called from OnProcessFrame currently.</p>
+          </div>
+        </div>
+      </article>
+
+      <article class="card risk-green">
+        <div class="card-header">
+          <h3>DeckViewOverlay</h3>
+          <span class="badge badge-green">GREEN</span>
+        </div>
+        <div class="card-body-row">
+          <div class="card-text">
+            <dl class="card-meta">
+              <dt>Trigger</dt><dd>Event-driven (ConsumeDeckLookupRequest)</dd>
+              <dt>Scan rate</dt><dd>On deck/pile open request only</dd>
+              <dt>Walk scope</dt><dd><strong>ROOT</strong> — FindOpenDeckView on request</dd>
+              <dt>File</dt><dd>DeckViewOverlay.cs</dd>
+            </dl>
+            <p class="card-appears"><strong>When:</strong> Deck view or pile-select grid — "View Upgrades" dwell on <code>NUpgradePreviewTickbox</code>.</p>
+            <p class="card-risk-note"><strong>Jul 2026:</strong> One scoped FindAll per screen open; tickbox hitbox tightened (was covering label row).</p>
+          </div>
+          <div class="screen-zone"><div class="zone zone-center">Deck grid</div></div>
+        </div>
+      </article>
+
+    </div>
+  </section>
+
+  <!-- MENU -->
+  <section id="menu">
+    <h2>Menu / pre-run</h2>
+    <p class="section-desc">Title screen and character select — before a run starts.</p>
+    <div class="card-grid">
+
+      <article class="card risk-red">
+        <div class="card-header">
+          <h3>MainMenuOverlay</h3>
+          <span class="badge badge-red">RED</span>
+        </div>
+        <div class="card-body-row">
+          <div class="card-text">
+            <dl class="card-meta">
+              <dt>Trigger</dt><dd>Per-frame — <strong>pre-gate detection</strong></dd>
+              <dt>Scan rate</dt><dd><code>FindMainMenu</code> ~4×/frame; rebuild gated 250ms</dd>
+              <dt>Walk scope</dt><dd><strong>ROOT</strong> FindMainMenu + scoped dialog/button walks before gate</dd>
+              <dt>File</dt><dd>MainMenuOverlay.cs</dd>
+            </dl>
+            <p class="card-appears"><strong>When:</strong> Title menu — MainMenu:1, MainMenu:2… direct dwell on menu buttons; Yes/No on quit dialog.</p>
+            <p class="card-risk-note"><strong>Observed ~30–40 FPS</strong> on title menu. Same pre-gate bug RoomOverlay had: throttle only skips rebuild, not detection. Chart used to show ~5.5k — real load ~150k+ with call_mult.</p>
+          </div>
+          <div class="screen-zone"><div class="zone zone-center">Title menu</div></div>
+        </div>
+      </article>
+
+      <article class="card risk-yellow">
+        <div class="card-header">
+          <h3>PauseMenuOverlay</h3>
+          <span class="badge badge-yellow">YELLOW</span>
+        </div>
+        <div class="card-body-row">
+          <div class="card-text">
+            <dl class="card-meta">
+              <dt>Trigger</dt><dd>Throttled lookup + cached targets</dd>
+              <dt>Scan rate</dt><dd>LookupRescanMs = 500ms</dd>
+              <dt>Walk scope</dt><dd><strong>ROOT</strong> FindPauseMenu; scoped NPauseMenuButton</dd>
+              <dt>File</dt><dd>PauseMenuOverlay.cs</dd>
+            </dl>
+            <p class="card-appears"><strong>When:</strong> Pause menu open (Escape) — PauseMenu:1–5 dwell targets. Back ribbon separate (<code>BackButtonOverlay</code>).</p>
+            <p class="card-risk-note"><strong>Observed ~60 FPS.</strong> Short pipeline: targets cached after first open; no full CollectDwellTargets chain.</p>
+          </div>
+          <div class="screen-zone"><div class="zone zone-full">Pause overlay</div></div>
+        </div>
+      </article>
+
+      <article class="card risk-green">
+        <div class="card-header">
+          <h3>CharacterSelectOverlay</h3>
+          <span class="badge badge-green">GREEN</span>
+        </div>
+        <div class="card-body-row">
+          <div class="card-text">
+            <dl class="card-meta">
+              <dt>Trigger</dt><dd>Cached-by screen instance-id</dd>
+              <dt>Scan rate</dt><dd>Rebuild once per screen</dd>
+              <dt>Walk scope</dt><dd><strong>ROOT</strong> FindScreen once; scoped buttons</dd>
+              <dt>File</dt><dd>CharacterSelectOverlay.cs</dd>
+            </dl>
+            <p class="card-appears"><strong>When:</strong> Character select — CharacterSelect:N icons + CharacterSelectConfirm.</p>
+          </div>
+          <div class="screen-zone"><div class="zone zone-center">Character icons</div></div>
+        </div>
+      </article>
+
+    </div>
+  </section>
+
+  <!-- SCREEN MODE -->
+  <section id="screen">
+    <h2>Screen-mode (non-combat interactive)</h2>
+    <p class="section-desc">One active screen overlay per OverlayMode — rewards, card picks, map, events, shop, rest/treasure rooms.</p>
+    <div class="card-grid">
+
+      <article class="card risk-yellow">
+        <div class="card-header">
+          <h3>EventOverlay</h3>
+          <span class="badge badge-yellow">YELLOW</span>
+        </div>
+        <div class="card-body-row">
+          <div class="card-text">
+            <dl class="card-meta">
+              <dt>Trigger</dt><dd>Pre-gate walk every frame + 250ms rebuild</dd>
+              <dt>Scan rate</dt><dd>RescanMs = 250ms (gate after walk)</dd>
+              <dt>Walk scope</dt><dd>Room scoped + <strong>ROOT</strong> fallback every Sync</dd>
+              <dt>File</dt><dd>EventOverlay.cs</dd>
+            </dl>
+            <p class="card-appears"><strong>When:</strong> Event rooms — numbered options on NEventOptionButton; proceed/skip. Multi-step events need rescan after each choice.</p>
+            <p class="card-risk-note"><strong>Risk:</strong> FindOptionButtons runs <em>before</em> throttle gate. EventSelectionService.InvalidateCache() on activation is the right rescan trigger.</p>
+          </div>
+          <div class="screen-zone"><div class="zone zone-center">Event options</div></div>
+        </div>
+      </article>
+
+      <article class="card risk-yellow">
+        <div class="card-header">
+          <h3>ShopOverlay</h3>
+          <span class="badge badge-yellow">YELLOW</span>
+        </div>
+        <div class="card-body-row">
+          <div class="card-text">
+            <dl class="card-meta">
+              <dt>Trigger</dt><dd>Cached shop-id; inventory check every Sync</dd>
+              <dt>Scan rate</dt><dd>Rescan on shop/inventory change; IsInventoryOpen every frame</dd>
+              <dt>Walk scope</dt><dd><strong>ROOT</strong> IsInventoryOpen + Rescan; scoped slot walks in Collect</dd>
+              <dt>File</dt><dd>ShopOverlay.cs, ShopInventoryQuery.cs</dd>
+            </dl>
+            <p class="card-appears"><strong>When:</strong> Merchant / fake merchant — numbered shop slots, character, proceed.</p>
+            <p class="card-risk-note"><strong>Risk:</strong> ShopInventoryQuery walks root every Sync even on cache hit.</p>
+          </div>
+          <div class="screen-zone"><div class="zone zone-center">Shop slots</div></div>
+        </div>
+      </article>
+
+      <article class="card risk-yellow">
+        <div class="card-header">
+          <h3>RewardsOverlay</h3>
+          <span class="badge badge-yellow">YELLOW</span>
+        </div>
+        <div class="card-body-row">
+          <div class="card-text">
+            <dl class="card-meta">
+              <dt>Trigger</dt><dd>Cached-by screen-id; proceed settle window</dd>
+              <dt>Scan rate</dt><dd>ProceedTargetBuilder.SettleMs = 1000ms</dd>
+              <dt>Walk scope</dt><dd><strong>SCOPED</strong> to NRewardsScreen</dd>
+              <dt>File</dt><dd>RewardsOverlay.cs, RewardsScreenQuery.cs</dd>
+            </dl>
+            <p class="card-appears"><strong>When:</strong> After combat / chest — PickCard:N, proceed/skip after claiming rewards.</p>
+            <p class="card-risk-note"><strong>Risk:</strong> No negative cache during empty-target / proceed-settle — rescans every frame until buttons appear.</p>
+          </div>
+          <div class="screen-zone"><div class="zone zone-center">Reward cards</div></div>
+        </div>
+      </article>
+
+      <article class="card risk-green">
+        <div class="card-header">
+          <h3>MapOverlay</h3>
+          <span class="badge badge-green">GREEN</span>
+        </div>
+        <div class="card-body-row">
+          <div class="card-text">
+            <dl class="card-meta">
+              <dt>Trigger</dt><dd>Cached-by screen instance-id</dd>
+              <dt>Scan rate</dt><dd>Rebuild on screen change only</dd>
+              <dt>Walk scope</dt><dd><strong>SCOPED</strong> NMapPoint on screen; root for proceed once</dd>
+              <dt>File</dt><dd>MapOverlay.cs</dd>
+            </dl>
+            <p class="card-appears"><strong>When:</strong> Map screen — MapNode:N on travelable nodes, MapProceed.</p>
+          </div>
+          <div class="screen-zone"><div class="zone zone-center">Map nodes</div></div>
+        </div>
+      </article>
+
+      <article class="card risk-green">
+        <div class="card-header">
+          <h3>PileSelectOverlay</h3>
+          <span class="badge badge-green">GREEN</span>
+        </div>
+        <div class="card-body-row">
+          <div class="card-text">
+            <dl class="card-meta">
+              <dt>Trigger</dt><dd>Snapshot flags + settle timers</dd>
+              <dt>Scan rate</dt><dd>LayoutSettleMs = 1000ms; NotifyPickCompleted invalidates</dd>
+              <dt>Walk scope</dt><dd>Scoped to screen; root fallback only if needed</dd>
+              <dt>File</dt><dd>PileSelectOverlay.cs, CardPickTargetQuery.cs</dd>
+            </dl>
+            <p class="card-appears"><strong>When:</strong> Card draft / upgrade pick / rest-site picker — PickCard:N, PickSkip.</p>
+            <p class="card-risk-note"><strong>Good pattern:</strong> Scan once after layout settles; event invalidates on pick.</p>
+          </div>
+          <div class="screen-zone"><div class="zone zone-center">Card grid pick</div></div>
+        </div>
+      </article>
+
+      <article class="card risk-green">
+        <div class="card-header">
+          <h3>RoomOverlay</h3>
+          <span class="badge badge-green">GREEN</span>
+        </div>
+        <div class="card-body-row">
+          <div class="card-text">
+            <dl class="card-meta">
+              <dt>Trigger</dt><dd>Event-driven — scan on room entry</dd>
+              <dt>Scan rate</dt><dd>Once on enter; InvalidateCache() after option click</dd>
+              <dt>Walk scope</dt><dd><strong>SCOPED</strong> room + root for proceed/skip on rescan</dd>
+              <dt>File</dt><dd>RoomOverlay.cs</dd>
+            </dl>
+            <p class="card-appears"><strong>When:</strong> Rest site / treasure room — RoomOption:N (chest), then relic + RoomProceed after chest opens.</p>
+            <p class="card-risk-note"><strong>Fixed Jul 2026:</strong> No timer, no ComputeLayoutKey polling. Chest click → one rescan for relic + leave button.</p>
+          </div>
+          <div class="screen-zone"><div class="zone zone-center">Chest / rest</div></div>
+        </div>
+      </article>
+
+    </div>
+  </section>
+
+  <!-- POTIONS -->
+  <section id="potions">
+    <h2>Potions</h2>
+    <p class="section-desc">Top-bar potion slots during a run; popup menu when a slot is activated.</p>
+    <div class="card-grid">
+
+      <article class="card risk-green">
+        <div class="card-header">
+          <h3>PotionSlotOverlay</h3>
+          <span class="badge badge-green">GREEN</span>
+        </div>
+        <div class="card-body-row">
+          <div class="card-text">
+            <dl class="card-meta">
+              <dt>Trigger</dt><dd>Cached — one-shot per run</dd>
+              <dt>Scan rate</dt><dd>Once when run starts; invalidate on settings close</dd>
+              <dt>Walk scope</dt><dd><strong>ROOT</strong> FindAll NPotionHolder (once)</dd>
+              <dt>File</dt><dd>PotionSlotOverlay.cs</dd>
+            </dl>
+            <p class="card-appears"><strong>When:</strong> Most in-run screens — PotionSlot:1, PotionSlot:2… on top bar flasks.</p>
+            <p class="card-risk-note"><strong>Fixed Jul 2026:</strong> No 500ms timer. RequestScan on potion click triggers popup scan only.</p>
+          </div>
+          <div class="screen-zone"><div class="zone zone-top">Potion slots</div></div>
+        </div>
+      </article>
+
+      <article class="card risk-green">
+        <div class="card-header">
+          <h3>PotionPopupOverlay</h3>
+          <span class="badge badge-green">GREEN</span>
+        </div>
+        <div class="card-body-row">
+          <div class="card-text">
+            <dl class="card-meta">
+              <dt>Trigger</dt><dd>RequestScan on potion slot click</dd>
+              <dt>Scan rate</dt><dd>One ROOT scan per potion activation — not on timer</dd>
+              <dt>Walk scope</dt><dd><strong>ROOT</strong> when pending; scoped NPotionPopupButton on rebuild</dd>
+              <dt>File</dt><dd>PotionPopupOverlay.cs</dd>
+            </dl>
+            <p class="card-appears"><strong>When:</strong> After clicking a potion — PotionPopup:N side buttons for Use/Discard choices.</p>
+            <p class="card-risk-note"><strong>Fixed Jul 2026:</strong> No scan while popup absent. PotionSlotOverlay.Activate → RequestScan().</p>
+          </div>
+          <div class="screen-zone"><div class="zone zone-top">Popup menu</div></div>
+        </div>
+      </article>
+
+    </div>
+  </section>
+
+  <!-- COMBAT -->
+  <section id="combat">
+    <h2>Combat</h2>
+    <p class="section-desc">Hand cards, enemies, End Turn, Confirm — the one area where somewhat frequent scanning is expected.</p>
+    <div class="card-grid">
+
+      <article class="card risk-green">
+        <div class="card-header">
+          <h3>CardConfirmPhaseQuery</h3>
+          <span class="badge badge-green">GREEN</span>
+        </div>
+        <div class="card-body-row">
+          <div class="card-text">
+            <dl class="card-meta">
+              <dt>Trigger</dt><dd>HandSelect / PileSelect only — cached lookup</dt>
+              <dt>Scan rate</dt><dd>Once per screen; <strong>zero</strong> on room/map/shop/event</dd>
+              <dt>Walk scope</dt><dd><strong>SCOPED</strong> to pile screen or hand (not ROOT)</dd>
+              <dt>File</dt><dd>CardConfirmPhaseQuery.cs</dd>
+            </dl>
+            <p class="card-appears"><strong>When:</strong> Card upgrade/removal confirm — native checkmark dwell during hand/pile select confirm phase.</p>
+            <p class="card-risk-note"><strong>Fixed Jul 2026 (pm):</strong> Was 2× ROOT walk every frame during card picking (~60k load) — dominated upgrade grid FPS. Now cached; scoped search once per screen change.</p>
+          </div>
+          <div class="screen-zone"><div class="zone zone-bottom">Hand + confirm</div></div>
+        </div>
+      </article>
+
+      <article class="card risk-yellow">
+        <div class="card-header">
+          <h3>CombatRowsCoordinator</h3>
+          <span class="badge badge-yellow">YELLOW</span>
+        </div>
+        <div class="card-body-row">
+          <div class="card-text">
+            <dl class="card-meta">
+              <dt>Trigger</dt><dd>Per-frame SyncCombatPlay</dd>
+              <dt>Scan rate</dt><dd>Every combat frame</dd>
+              <dt>Walk scope</dt><dd><strong>SCOPED</strong> hand holders; enemies via EnemyOrderService cache</dd>
+              <dt>File</dt><dd>CombatRowsCoordinator.cs, CardButtonRow.cs</dd>
+            </dl>
+            <p class="card-appears"><strong>When:</strong> Combat play mode — numbered target buttons above hand cards for play/targeting.</p>
+            <p class="card-risk-note"><strong>Expected:</strong> Hand changes frequently; uses ActiveHolders when available.</p>
+          </div>
+          <div class="screen-zone"><div class="zone zone-bottom">Hand rows</div></div>
+        </div>
+      </article>
+
+      <article class="card risk-yellow">
+        <div class="card-header">
+          <h3>EnemyOrderService</h3>
+          <span class="badge badge-yellow">YELLOW</span>
+        </div>
+        <div class="card-body-row">
+          <div class="card-text">
+            <dl class="card-meta">
+              <dt>Trigger</dt><dd>Cached; invalidate on spawn</dd>
+              <dt>Scan rate</dt><dd>Root walk on cache miss / new enemy</dd>
+              <dt>Walk scope</dt><dd><strong>ROOT</strong> FindAll NCreature</dd>
+              <dt>File</dt><dd>EnemyOrderService.cs, EnemyLabelOverlay.cs</dd>
+            </dl>
+            <p class="card-appears"><strong>When:</strong> Enemy ordering for targeting + optional enemy slot labels.</p>
+            <p class="card-risk-note"><strong>Good:</strong> Prunes on death without full rescan; full walk only on spawn.</p>
+          </div>
+          <div class="screen-zone"><div class="zone zone-center">Enemies</div></div>
+        </div>
+      </article>
+
+      <article class="card risk-green">
+        <div class="card-header">
+          <h3>HandSelectOverlay</h3>
+          <span class="badge badge-green">GREEN</span>
+        </div>
+        <div class="card-body-row">
+          <div class="card-text">
+            <dl class="card-meta">
+              <dt>Trigger</dt><dd>Cached hand-id + signature</dd>
+              <dt>Scan rate</dt><dd>Rebuild on hand/mode change</dd>
+              <dt>Walk scope</dt><dd><strong>SCOPED</strong> to NPlayerHand</dd>
+              <dt>File</dt><dd>HandSelectOverlay.cs</dd>
+            </dl>
+            <p class="card-appears"><strong>When:</strong> Discard / upgrade select — numbered buttons on hand cards.</p>
+          </div>
+          <div class="screen-zone"><div class="zone zone-bottom">Hand select</div></div>
+        </div>
+      </article>
+
+      <article class="card risk-green">
+        <div class="card-header">
+          <h3>ConfirmOverlay</h3>
+          <span class="badge badge-green">GREEN</span>
+        </div>
+        <div class="card-body-row">
+          <div class="card-text">
+            <dl class="card-meta">
+              <dt>Trigger</dt><dd>Mode-change cache refresh</dd>
+              <dt>Scan rate</dt><dd>RefreshNativeConfirmCache on HandSelect entry</dd>
+              <dt>Walk scope</dt><dd><strong>ROOT</strong> once on mode change; preview scan once if needed</dd>
+              <dt>File</dt><dd>ConfirmOverlay.cs</dd>
+            </dl>
+            <p class="card-appears"><strong>When:</strong> Hand select — E/OK overlay + NativeConfirm dwell on game's confirm button.</p>
+          </div>
+          <div class="screen-zone"><div class="zone zone-bottomright">Confirm</div></div>
+        </div>
+      </article>
+
+      <article class="card risk-green">
+        <div class="card-header">
+          <h3>EndTurnOverlay</h3>
+          <span class="badge badge-green">GREEN</span>
+        </div>
+        <div class="card-body-row">
+          <div class="card-text">
+            <dl class="card-meta">
+              <dt>Trigger</dt><dd>Cached native button</dd>
+              <dt>Scan rate</dt><dd>EnsureNativeEndTurnCached when cache empty</dd>
+              <dt>Walk scope</dt><dd><strong>ROOT</strong> FindAll NCombatUi once</dd>
+              <dt>File</dt><dd>EndTurnOverlay.cs</dd>
+            </dl>
+            <p class="card-appears"><strong>When:</strong> Combat play — E/END overlay + native End Turn button dwell.</p>
+          </div>
+          <div class="screen-zone"><div class="zone zone-bottomright">End Turn</div></div>
+        </div>
+      </article>
+
+      <article class="card risk-green">
+        <div class="card-header">
+          <h3>CardAnchorService</h3>
+          <span class="badge badge-green">GREEN</span>
+        </div>
+        <div class="card-body-row">
+          <div class="card-text">
+            <dl class="card-meta">
+              <dt>Trigger</dt><dd>Per-holder cache by instance-id</dd>
+              <dt>Scan rate</dt><dd>On cache miss / position drift</dd>
+              <dt>Walk scope</dt><dd><strong>SCOPED</strong> to card holder subtree</dd>
+              <dt>File</dt><dd>CardAnchorService.cs</dd>
+            </dl>
+            <p class="card-appears"><strong>When:</strong> Support — card rect measurement for all hand/combat button positioning.</p>
+          </div>
+        </div>
+      </article>
+
+      <article class="card risk-gray">
+        <div class="card-header">
+          <h3>HandInputBlocker / MouseCardPlayBlocker</h3>
+          <span class="badge badge-gray">GRAY</span>
+        </div>
+        <div class="card-body-row">
+          <div class="card-text">
+            <dl class="card-meta">
+              <dt>Trigger</dt><dd>Disabled by HandBlockPolicy today</dd>
+              <dt>Scan rate</dt><dd>ScanInterval.Frames() if re-enabled</dd>
+              <dt>Walk scope</dt><dd>SCOPED hand / ROOT on miss</dd>
+              <dt>File</dt><dd>HandInputBlocker.cs, MouseCardPlayBlocker.cs</dd>
+            </dl>
+            <p class="card-appears"><strong>When:</strong> Would block native hand input during overlay — currently always Release().</p>
+            <p class="card-risk-note">If re-enabled: MouseCardPlayBlocker would be YELLOW (root walk every frame on miss).</p>
+          </div>
+        </div>
+      </article>
+
+    </div>
+  </section>
+
+  <!-- SERVICES -->
+  <section id="services">
+    <h2>Activation &amp; geometry services</h2>
+    <p class="section-desc">No dwell targets — click forwarding, hitbox math, selection handlers. GRAY = safe from scan loops.</p>
+    <div class="card-grid">
+
+      <article class="card risk-gray">
+        <div class="card-header"><h3>InputForwardService</h3><span class="badge badge-gray">GRAY</span></div>
+        <p class="card-appears">ForceClick / key press on activation — scoped NCard walk in holder only.</p>
+      </article>
+
+      <article class="card risk-gray">
+        <div class="card-header"><h3>ControlHitboxService</h3><span class="badge badge-gray">GRAY</span></div>
+        <p class="card-appears">Generous hitbox from control + descendants — no FindAll; used during Collect for rect reads.</p>
+      </article>
+
+      <article class="card risk-gray">
+        <div class="card-header"><h3>EventSelectionService</h3><span class="badge badge-gray">GRAY</span></div>
+        <p class="card-appears">Activates event option → calls EventOverlay.InvalidateCache() — correct event-driven rescan trigger.</p>
+      </article>
+
+      <article class="card risk-gray">
+        <div class="card-header"><h3>RewardSelectionService</h3><span class="badge badge-gray">GRAY</span></div>
+        <p class="card-appears">Reward/proceed activation — invalidates overlay caches on success.</p>
+      </article>
+
+      <article class="card risk-gray">
+        <div class="card-header"><h3>PileCardSelectionService</h3><span class="badge badge-gray">GRAY</span></div>
+        <p class="card-appears">Card pick activation — parent-chain walk only, no scene scan.</p>
+      </article>
+
+      <article class="card risk-gray">
+        <div class="card-header"><h3>ShopSelectionService</h3><span class="badge badge-gray">GRAY</span></div>
+        <p class="card-appears">Purchase activation — scoped FindAll inside merchant slot only.</p>
+      </article>
+
+      <article class="card risk-gray">
+        <div class="card-header"><h3>ProceedTargetBuilder</h3><span class="badge badge-gray">GRAY</span></div>
+        <p class="card-appears">Proceed/skip snapshot builder — called during overlay rebuild only (SettleMs = 1000ms).</p>
+      </article>
+
+      <article class="card risk-gray">
+        <div class="card-header"><h3>RewardsScreenQuery</h3><span class="badge badge-gray">GRAY</span></div>
+        <p class="card-appears">Reflection-first reward/proceed lookup — scoped FindAll fallback on rewards screen.</p>
+      </article>
+
+      <article class="card risk-gray">
+        <div class="card-header"><h3>CardPickTargetQuery</h3><span class="badge badge-gray">GRAY</span></div>
+        <p class="card-appears">Holder/card/skip finder for pile-select — called from gated snapshot rebuilds, not every frame.</p>
+      </article>
+
+      <article class="card risk-gray">
+        <div class="card-header"><h3>MapSelectionService / MapScrollService</h3><span class="badge badge-gray">GRAY</span></div>
+        <p class="card-appears">Map node activation + synthetic scroll — no tree walks.</p>
+      </article>
+
+      <article class="card risk-gray">
+        <div class="card-header"><h3>CardPlayService / CardSelectionService</h3><span class="badge badge-gray">GRAY</span></div>
+        <p class="card-appears">Combat play and hand-select activation handlers — no per-frame scans.</p>
+      </article>
+
+      <article class="card risk-gray">
+        <div class="card-header"><h3>HandBlockPolicy / HandLayoutDiagnostics</h3><span class="badge badge-gray">GRAY</span></div>
+        <p class="card-appears">Policy constants + hand-size-change logging — no scans.</p>
+      </article>
+
+      <article class="card risk-gray">
+        <div class="card-header"><h3>LegacyOverlayCleanup / ShopAlignmentDiagnostics</h3><span class="badge badge-gray">GRAY</span></div>
+        <p class="card-appears">One-shot layer removal / opt-in debug (1s throttle) — not hot path.</p>
+      </article>
+
+      <article class="card risk-gray">
+        <div class="card-header"><h3>DwellHoverService / DwellDebugOverlay / DwellInputRouter</h3><span class="badge badge-gray">GRAY</span></div>
+        <p class="card-appears">Dwell timer, debug hitbox render, click router — consume cached targets, no tree walks.</p>
+        <p class="card-risk-note"><strong>FPS note:</strong> Green hitbox debug render runs every frame when enabled — 0 Scan Load but can cost 5–15 FPS on dense screens (card grid with 10+ boxes).</p>
+      </article>
+
+    </div>
+  </section>
+
+  <!-- FLAGGED -->
+  <section id="flagged" class="flagged-panel">
+    <h2>Flagged for review — ranked by scan cost</h2>
+    <p class="section-desc" style="margin-bottom:1rem;color:var(--muted);">Use this list to give targeted instructions. Items marked <strong>Fixed Jul 2026</strong> are done — see Scan Load treasure room tab for new totals.</p>
+    <ol class="flagged-list">
+
+      <li>
+        <strong>Fixed Jul 2026 — Room, UtilityBar, PotionSlot, PotionPopup, BackButton, treasure room steady state</strong>
+        <div class="current"><strong>Was:</strong> Treasure room Scan Load ~105k; ~24 FPS observed.</div>
+        <div class="ideal"><strong>Now:</strong> Event-driven — once on entry, rescan on chest click. Observed <strong>~60 FPS</strong> on treasure room. Steady-state load ~3.5k.</div>
+      </li>
+
+      <li>
+        <strong>Fixed Jul 2026 (pm) — ViewScrollOverlay + CardConfirmPhaseQuery on card-grid / upgrade picker</strong>
+        <div class="current"><strong>Was:</strong> Chart showed ~35k; real load ~105k+ (CardConfirm 2× ROOT/frame + WalkForCardGrid). Observed <strong>~30 FPS</strong> on upgrade grid.</div>
+        <div class="ideal"><strong>Now:</strong> Cached scoped confirm lookup; ViewScroll uses mode cache only. Expected load ~2–4k steady. User verify after restart.</div>
+      </li>
+
+      <li class="rank-red">
+        <strong>1. MainMenuOverlay pre-gate FindMainMenu (RED — title menu)</strong>
+        <div class="current"><strong>Current:</strong> <code>IsActive()</code> → ROOT walk ~4×/frame from HandTargetingOverlay + Collect; <code>Sync()</code> runs <code>FindMainMenu</code> + dialog probe <strong>before</strong> 250ms gate. Chart understated (~5.5k vs ~150k real).</div>
+        <div class="ideal"><strong>Ideal:</strong> Same pattern as RoomOverlay fix — cache <code>NMainMenu</code> ref on first find; scan once on menu appear; invalidate on dialog open/close only.</div>
+      </li>
+
+      <li>
+        <strong>2. EventOverlay (YELLOW — events)</strong>
+        <div class="current"><strong>Current:</strong> FindOptionButtons runs every Sync() before the 250ms gate; ROOT fallback when room empty.</div>
+        <div class="ideal"><strong>Ideal:</strong> Scan once on Event mode entry + once per EventSelectionService activation. Move FindOptionButtons inside the gate.</div>
+      </li>
+
+      <li>
+        <strong>3. ShopOverlay + ShopInventoryQuery (YELLOW — shop)</strong>
+        <div class="current"><strong>Current:</strong> IsInventoryOpen(ROOT) every Sync() even when shop cache valid.</div>
+        <div class="ideal"><strong>Ideal:</strong> Cache inventory-open bool on rescan only; measure slot rects once at rescan.</div>
+      </li>
+
+      <li>
+        <strong>4. RewardsOverlay (YELLOW — rewards)</strong>
+        <div class="current"><strong>Current:</strong> No negative cache — rescans every frame during 1000ms proceed-settle or when target list empty.</div>
+        <div class="ideal"><strong>Ideal:</strong> Cache "waiting for proceed" state; single scan after settle timer fires.</div>
+      </li>
+
+      <li>
+        <strong>5. Meta: duplicate call sites + timer invalidation chains</strong>
+        <div class="current"><strong>Pattern:</strong> One overlay looks GREEN in isolation but HandTargeting calls it 3–5×/frame. Timer refresh invalidates a <em>second</em> overlay's cache (GetMode → ViewScreenQuery was a chain).</div>
+        <div class="ideal"><strong>Ideal:</strong> When auditing, grep call sites — not just the overlay file. Score with <code>call_mult</code> in Scan Load dashboard.</div>
+      </li>
+
+    </ol>
+  </section>
+
+  <section style="margin-top:2rem;color:var(--muted);font-size:0.9rem;">
+    <p><strong>How to use this doc:</strong> Open in any browser. Use category links at top to jump. Use the <strong>Scan Load</strong> tab and scenario buttons to see totals before/after fixes. Tell AI: "make it behave like RoomOverlay (scan on entry + InvalidateCache on action)" rather than "scan every 500ms".</p>
+    <p style="margin-top:0.5rem;">Code audit + Jul 2026 testing pass — Dwell Targeting — <code>docs/overlay-scan-map.html</code></p>
+  </section>
+
+</main>
+
+<script>
+(function () {
+  const FIVE_SEC = 5000;
+  const SCANS_PER_FRAME = Math.round(FIVE_SEC / (1000 / 60)); // 300 @ 60 FPS
+  const SCOPE = { ROOT: 100, SCOPED: 5, NONE: 0 };
+
+  // interval: ms between fires, "frame" = every frame, "once" = ~1/5s, "stable" = 0 (cached valid)
+  function scansIn5s(interval) {
+    if (interval === "frame") return SCANS_PER_FRAME;
+    if (interval === "once") return 1;
+    if (interval === "twice") return 2;
+    if (interval === "rare") return 2;
+    if (interval === "stable" || interval === "none" || interval === 0) return 0;
+    return Math.round(FIVE_SEC / interval);
+  }
+
+  function calcLoad(entry) {
+    if (!entry || entry.interval === "none" || entry.interval === "stable") return 0;
+    const s = scansIn5s(entry.interval);
+    const w = entry.walks || 0;
+    const p = SCOPE[entry.scope] || 0;
+    const mult = entry.callMult || 1;
+    return s * w * p * mult;
+  }
+
+  function fmtInterval(iv) {
+    if (iv === "frame") return "every frame";
+    if (iv === "once") return "once / 5s";
+    if (iv === "twice") return "2× / 5s";
+    if (iv === "rare") return "~2 / 5s";
+    if (iv === "stable") return "stable (0)";
+    if (iv === "none" || iv === 0) return "—";
+    return iv + " ms";
+  }
+
+  // Jul 2026 — reflects event-driven pass + Jul 18 testing corrections
+  const OVERLAYS = {
+    OverlayModeService:           { interval: "stable", walks: 0, scope: "NONE", card: "OverlayModeService", note: "static screens skip 250ms re-walk" },
+    GameOverlayVisibility:        { interval: 500,  walks: 1, scope: "ROOT",   card: "GameOverlayVisibility" },
+    ViewScreenQuery:              { interval: "once", walks: 1, scope: "ROOT", card: "ViewScreenQuery", note: "on mode change only" },
+    ViewScrollOverlay:            { interval: "frame", walks: 0, scope: "NONE", card: "ViewScrollOverlay", note: "scroll hover only; no tree walk" },
+    SettingsOverlay:              { interval: "frame", walks: 0, scope: "NONE", card: "SettingsOverlay", note: "gear bounds cheap; panel SCOPED when open" },
+    UtilityBarOverlay:            { interval: "once", walks: 1, scope: "ROOT",   card: "UtilityBarOverlay", note: "once per run" },
+    BackButtonOverlay:            { interval: "once", walks: 1, scope: "ROOT",   card: "BackButtonOverlay", note: "invalidate on pause open / view open" },
+    ModConfigScrollHarmonizer:    { interval: "once", walks: 1, scope: "ROOT", card: "ModConfigScrollHarmonizer" },
+    OverlayVisToggle:             { interval: "none", walks: 0, scope: "NONE", card: "OverlayVisToggle" },
+    DeckViewOverlay:              { interval: "once", walks: 1, scope: "SCOPED", card: "DeckViewOverlay", note: "NUpgradePreviewTickbox scoped" },
+    MainMenuOverlay:              { interval: "frame", walks: 1, scope: "ROOT", callMult: 4, card: "MainMenuOverlay", note: "FindMainMenu ~4×/frame pre-gate" },
+    PauseMenuOverlay:             { interval: "once", walks: 1, scope: "ROOT",   card: "PauseMenuOverlay", note: "cached after first open" },
+    CharacterSelectOverlay:       { interval: "once", walks: 2, scope: "SCOPED", card: "CharacterSelectOverlay" },
+    EventOverlay:                 { interval: "frame", walks: 2, scope: "ROOT", card: "EventOverlay", note: "pre-gate walk every Sync" },
+    ShopOverlay:                  { interval: "frame", walks: 1, scope: "ROOT", card: "ShopOverlay", note: "IsInventoryOpen every Sync" },
+    RewardsOverlay:               { interval: "frame", walks: 2, scope: "SCOPED", card: "RewardsOverlay", note: "during proceed-settle" },
+    MapOverlay:                   { interval: "once", walks: 2, scope: "SCOPED", card: "MapOverlay" },
+    PileSelectOverlay:            { interval: "once", walks: 3, scope: "SCOPED", card: "PileSelectOverlay", note: "layout snapshot after 1s settle" },
+    RoomOverlay:                  { interval: "once", walks: 3, scope: "ROOT",   card: "RoomOverlay", note: "entry + InvalidateCache on click" },
+    PotionSlotOverlay:            { interval: "once", walks: 1, scope: "ROOT",   card: "PotionSlotOverlay" },
+    PotionPopupOverlay:           { interval: "none", walks: 0, scope: "NONE", card: "PotionPopupOverlay", note: "RequestScan on potion click" },
+    CardConfirmPhaseQuery:        { interval: "once", walks: 2, scope: "SCOPED", card: "CardConfirmPhaseQuery", note: "cached per screen; was ROOT×2/frame" },
+    CombatRowsCoordinator:        { interval: "frame", walks: 1, scope: "SCOPED", card: "CombatRowsCoordinator" },
+    EnemyOrderService:            { interval: "rare", walks: 1, scope: "ROOT", card: "EnemyOrderService" },
+    HandSelectOverlay:            { interval: "rare", walks: 1, scope: "SCOPED", card: "HandSelectOverlay" },
+    ConfirmOverlay:               { interval: "once", walks: 1, scope: "ROOT", card: "ConfirmOverlay" },
+    EndTurnOverlay:               { interval: "rare", walks: 1, scope: "ROOT", card: "EndTurnOverlay" },
+    CardAnchorService:            { interval: "rare", walks: 2, scope: "SCOPED", card: "CardAnchorService" },
+    HoverScrollStripOverlay:      { interval: "none", walks: 0, scope: "NONE", card: "HoverScrollStripOverlay" },
+    DwellDebugOverlay:            { interval: "frame", walks: 0, scope: "NONE", card: "DwellDebugOverlay", note: "0 load but costs FPS when hitboxes on" },
+  };
+
+  const SCENARIOS = {
+    treasure: {
+      label: "Treasure room (static)",
+      hint: "Observed ~60 FPS Jul 2026. Utility/potion HUD overlays intentional during run.",
+      active: [
+        "OverlayModeService", "GameOverlayVisibility", "UtilityBarOverlay",
+        "OverlayVisToggle", "PotionSlotOverlay", "RoomOverlay"
+      ]
+    },
+    treasureOpen: {
+      label: "Treasure (after chest click)",
+      hint: "One extra RoomOverlay rescan for relic + proceed.",
+      active: [
+        "OverlayModeService", "GameOverlayVisibility", "UtilityBarOverlay",
+        "OverlayVisToggle", "PotionSlotOverlay", "RoomOverlay"
+      ],
+      overrides: {
+        RoomOverlay: { interval: "twice", walks: 3, scope: "ROOT", note: "entry + post-click rescan" }
+      }
+    },
+    pause: {
+      label: "Pause menu (in-run)",
+      hint: "Observed ~60 FPS. Short pipeline — skips GetMode + full Collect chain.",
+      active: [
+        "PauseMenuOverlay", "BackButtonOverlay", "OverlayVisToggle", "SettingsOverlay", "PotionSlotOverlay"
+      ],
+      overrides: {
+        OverlayModeService: { interval: "none", walks: 0, scope: "NONE" },
+        SettingsOverlay: { interval: "frame", walks: 0, scope: "NONE", note: "gear only" }
+      }
+    },
+    cardgrid: {
+      label: "Card-grid / upgrade picker",
+      hint: "PileSelect (rest-site upgrade). Was ~30 FPS; fixed ViewScroll + CardConfirm. Verify after restart.",
+      active: [
+        "OverlayModeService", "GameOverlayVisibility", "UtilityBarOverlay", "BackButtonOverlay",
+        "OverlayVisToggle", "ViewScrollOverlay", "DeckViewOverlay", "PileSelectOverlay",
+        "CardConfirmPhaseQuery", "PotionSlotOverlay"
+      ],
+      overrides: {
+        OverlayModeService: { interval: "stable", walks: 0, scope: "NONE" },
+        CardConfirmPhaseQuery: { interval: "once", walks: 2, scope: "SCOPED", note: "cached; not every frame" }
+      }
+    },
+    map: {
+      label: "Map screen",
+      hint: "Travel-enabled map — stable mode cache when node valid.",
+      active: [
+        "OverlayModeService", "GameOverlayVisibility", "UtilityBarOverlay",
+        "OverlayVisToggle", "PotionSlotOverlay", "MapOverlay"
+      ],
+      overrides: {
+        OverlayModeService: { interval: "stable", walks: 0, scope: "NONE" }
+      }
+    },
+    combat: {
+      label: "Combat (play mode)",
+      hint: "Hand visible, enemies present.",
+      active: [
+        "OverlayModeService", "GameOverlayVisibility", "UtilityBarOverlay", "OverlayVisToggle",
+        "PotionSlotOverlay", "CombatRowsCoordinator", "EnemyOrderService", "EndTurnOverlay", "CardAnchorService"
+      ]
+    },
+    handselect: {
+      label: "Hand confirm phase",
+      hint: "CardConfirm active during upgrade/removal confirm — scoped cached lookup.",
+      active: [
+        "OverlayModeService", "GameOverlayVisibility", "UtilityBarOverlay", "OverlayVisToggle",
+        "PotionSlotOverlay", "CardConfirmPhaseQuery", "HandSelectOverlay"
+      ],
+      overrides: {
+        CardConfirmPhaseQuery: { interval: "once", walks: 2, scope: "SCOPED", note: "confirm phase" }
+      }
+    },
+    event: {
+      label: "Event screen",
+      hint: "Multi-step events — EventOverlay is the main screen cost.",
+      active: [
+        "OverlayModeService", "GameOverlayVisibility", "UtilityBarOverlay",
+        "OverlayVisToggle", "PotionSlotOverlay", "EventOverlay"
+      ]
+    },
+    shop: {
+      label: "Shop screen",
+      hint: "Merchant room — ShopOverlay per-frame inventory check.",
+      active: [
+        "OverlayModeService", "GameOverlayVisibility", "UtilityBarOverlay",
+        "OverlayVisToggle", "PotionSlotOverlay", "ShopOverlay"
+      ]
+    },
+    potion: {
+      label: "Potion popup open",
+      hint: "User clicked a potion slot — single popup scan.",
+      active: [
+        "OverlayModeService", "GameOverlayVisibility", "UtilityBarOverlay",
+        "OverlayVisToggle", "PotionSlotOverlay", "PotionPopupOverlay"
+      ],
+      overrides: {
+        PotionPopupOverlay: { interval: "once", walks: 1, scope: "ROOT", note: "after RequestScan" }
+      }
+    },
+    title: {
+      label: "Title menu",
+      hint: "Observed ~30–40 FPS. MainMenu pre-gate walks dominate — chart was severely understated.",
+      active: ["MainMenuOverlay", "OverlayVisToggle", "SettingsOverlay"],
+      overrides: {
+        MainMenuOverlay: { interval: "frame", walks: 1, scope: "ROOT", callMult: 4, note: "IsActive×4 + Sync pre-gate" },
+        SettingsOverlay: { interval: "frame", walks: 0, scope: "NONE", note: "gear visible pre-run" }
+      }
+    }
+  };
+
+  function fmtLoad(n) {
+    return n.toLocaleString();
+  }
+
+  function totalClass(total) {
+    if (total >= 50000) return "high";
+    if (total >= 15000) return "mid";
+    return "low";
+  }
+
+  function renderScenario(key) {
+    const scenario = SCENARIOS[key];
+    const tbody = document.getElementById("scan-breakdown-body");
+    const totalEl = document.getElementById("scan-total-value");
+    const hintEl = document.getElementById("scan-total-hint");
+    tbody.innerHTML = "";
+    let total = 0;
+    const rows = [];
+
+    scenario.active.forEach(function (id) {
+      const base = OVERLAYS[id];
+      if (!base) return;
+      const entry = Object.assign({}, base, (scenario.overrides && scenario.overrides[id]) || {});
+      const load = calcLoad(entry);
+      total += load;
+      rows.push({ id: id, entry: entry, load: load });
+    });
+
+    rows.sort(function (a, b) { return b.load - a.load; });
+
+    rows.forEach(function (row) {
+      const tr = document.createElement("tr");
+      if (row.load === 0) tr.className = "row-zero";
+      tr.innerHTML =
+        "<td>" + row.id + (row.entry.note ? " <span style=\"color:var(--muted);font-size:0.8em\">(" + row.entry.note + ")</span>" : "") + "</td>" +
+        "<td>" + fmtInterval(row.entry.interval) + "</td>" +
+        "<td>" + row.entry.walks + "</td>" +
+        "<td>" + row.entry.scope + "</td>" +
+        "<td class=\"num\">" + fmtLoad(row.load) + "</td>";
+      tbody.appendChild(tr);
+    });
+
+    totalEl.textContent = fmtLoad(total);
+    totalEl.className = "value " + totalClass(total);
+    hintEl.textContent = scenario.hint + " — Goal: drive this number down after each fix.";
+  }
+
+  function initTabs() {
+    const container = document.getElementById("scenario-tabs");
+    const keys = Object.keys(SCENARIOS);
+    keys.forEach(function (key, i) {
+      const btn = document.createElement("button");
+      btn.textContent = SCENARIOS[key].label;
+      btn.dataset.scenario = key;
+      if (i === 0) btn.className = "active";
+      btn.addEventListener("click", function () {
+        container.querySelectorAll("button").forEach(function (b) { b.classList.remove("active"); });
+        btn.classList.add("active");
+        renderScenario(key);
+      });
+      container.appendChild(btn);
+    });
+    renderScenario(keys[0]);
+  }
+
+  function badgeCards() {
+    document.querySelectorAll(".card h3").forEach(function (h3) {
+      const title = h3.textContent.trim();
+      let matched = null;
+      Object.keys(OVERLAYS).forEach(function (id) {
+        if (title === id || title.indexOf(id) === 0) matched = id;
+      });
+      if (!matched) return;
+      const load = calcLoad(OVERLAYS[matched]);
+      const header = h3.closest(".card-header");
+      if (!header || header.querySelector(".scan-load-badge")) return;
+      const badge = document.createElement("span");
+      badge.className = "scan-load-badge";
+      badge.title = "Scan Load if active full 5s (see dashboard)";
+      badge.textContent = "Load: " + fmtLoad(load);
+      header.insertBefore(badge, header.querySelector(".badge"));
+    });
+  }
+
+  initTabs();
+  badgeCards();
+})();
+</script>
+</body>
+</html>

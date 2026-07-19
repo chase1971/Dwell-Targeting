@@ -14,6 +14,7 @@ internal static class ViewScreenQuery
     {
         _scanPending = true;
         _deckLookupPending = true;
+        BackButtonOverlay.InvalidateLookup();
     }
 
     internal static void Invalidate()
@@ -30,6 +31,10 @@ internal static class ViewScreenQuery
         _deckLookupPending = false;
         return true;
     }
+
+    internal static bool ShouldAttemptDeckLookup() => _deckLookupPending;
+
+    internal static void NotifyDeckFound() => _deckLookupPending = false;
 
     internal static bool IsDeckViewOpen() => DeckViewOverlay.IsOpen;
 

@@ -8,6 +8,8 @@ public static class ModEntry
 {
     public static void Initialize()
     {
+        ScanRuntime.Info = ModLogger.Info;
+        ScanRuntime.Warn = ModLogger.Warn;
         SettingsStore.Initialize();
         SettingsOverlay.EnsureInitialized();
         OverlayVisToggle.EnsureInitialized();

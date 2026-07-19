@@ -49,10 +49,26 @@ internal static class OverlayModeService
         long now = System.Environment.TickCount64;
         if (key == _cachedInvalidationKey)
         {
-            if (!CombatManager.Instance.IsInProgress && now - _lastScanTick >= ModeRescanIntervalMs)
+            if (_cachedMode is OverlayMode.Room or OverlayMode.Event && HasVisiblePileSelectScreen())
             {
                 RefreshMode(key, frame);
                 ViewScreenQuery.Invalidate();
+                return _cachedMode;
+            }
+
+            if (!CombatManager.Instance.IsInProgress && now - _lastScanTick >= ModeRescanIntervalMs)
+            {
+                if (!IsCachedModeStillValid())
+                {
+                    RefreshMode(key, frame);
+                    ViewScreenQuery.Invalidate();
+                }
+                else
+                {
+                    _cachedFrame = frame;
+                    _lastScanTick = now;
+                }
+
                 return _cachedMode;
             }
 
@@ -148,6 +164,85 @@ internal static class OverlayModeService
         _cachedRoomNode = null;
     }
 
+    private static bool IsCachedModeStillValid()
+    {
+        switch (_cachedMode)
+        {
+            case OverlayMode.PileSelect:
+                if (IsLiveVisibleScreen(_cachedPileSelectScreen))
+                    return true;
+                return PilePreviewQuery.IsUpgradeConfirmFlowActive();
+            case OverlayMode.Rewards:
+                return _cachedRewardsScreen != null
+                    && NodeQuery.IsLive(_cachedRewardsScreen)
+                    && (NodeQuery.IsVisible(_cachedRewardsScreen)
+                        || RewardsScreenQuery.HasVisibleChoices(_cachedRewardsScreen));
+            case OverlayMode.Map:
+                return _cachedMapScreen != null
+                    && NodeQuery.IsLive(_cachedMapScreen)
+                    && NodeQuery.IsVisible(_cachedMapScreen)
+                    && _cachedMapScreen is { IsOpen: true, IsTravelEnabled: true };
+            case OverlayMode.Shop:
+                return IsLiveVisibleScreen(_cachedShopNode);
+            case OverlayMode.Event:
+                if (HasVisiblePileSelectScreen())
+                    return false;
+                return IsLiveVisibleScreen(_cachedEventRoom);
+            case OverlayMode.Room:
+                if (HasVisiblePileSelectScreen())
+                    return false;
+                return IsLiveVisibleScreen(_cachedRoomNode);
+            case OverlayMode.CombatPlay:
+            case OverlayMode.HandSelect:
+                return CombatManager.Instance.IsInProgress;
+            default:
+                return false;
+        }
+    }
+
+    private static bool IsLiveVisibleScreen(Node? node) =>
+        node != null
+        && NodeQuery.IsLive(node)
+        && node is CanvasItem canvas
+        && NodeQuery.IsVisible(canvas);
+
+    /// <summary>
+    /// Rest/event rooms stay visible under smith/card sub-screens — force a mode rescan so PileSelect wins.
+    /// </summary>
+    private static bool HasVisiblePileSelectScreen()
+    {
+        var tree = Engine.GetMainLoop() as SceneTree;
+        if (tree?.Root == null)
+            return false;
+
+        return FindVisiblePileSelectScreen(tree.Root) != null;
+    }
+
+    private static Node? FindVisiblePileSelectScreen(Node node)
+    {
+        if (!NodeQuery.IsLive(node))
+            return null;
+
+        if (node is CanvasItem canvas && NodeQuery.IsVisible(canvas) && IsPileSelectScreen(node))
+            return node;
+
+        try
+        {
+            foreach (var child in node.GetChildren())
+            {
+                var found = FindVisiblePileSelectScreen(child);
+                if (found != null)
+                    return found;
+            }
+        }
+        catch
+        {
+            /* disposed mid-walk */
+        }
+
+        return null;
+    }
+
     private static int ComputeInvalidationKey()
     {
         int key = 0;
@@ -191,6 +286,12 @@ internal static class OverlayModeService
             return;
 
         ScanTree(tree.Root);
+
+        if (_cachedPileSelectScreen == null && PilePreviewQuery.IsUpgradeConfirmFlowActive())
+        {
+            _cachedMode = OverlayMode.PileSelect;
+            return;
+        }
 
         if (_cachedPileSelectScreen != null)
         {
@@ -313,6 +414,7 @@ internal static class OverlayModeService
         if (node is NCombatPileCardSelectScreen
             or NChooseACardSelectionScreen
             or NCardGridSelectionScreen
+            or NDeckUpgradeSelectScreen
             or NSimpleCardSelectScreen
             or NCardRewardSelectionScreen)
         {
@@ -322,7 +424,9 @@ internal static class OverlayModeService
         string typeName = node.GetType().Name;
         return typeName.Contains("CardSelection", StringComparison.Ordinal)
             || typeName.Contains("ChooseACard", StringComparison.Ordinal)
-            || typeName.Contains("CardReward", StringComparison.Ordinal);
+            || typeName.Contains("CardReward", StringComparison.Ordinal)
+            || typeName.Contains("UpgradeSelect", StringComparison.Ordinal)
+            || typeName.Contains("SelectionScreen", StringComparison.Ordinal);
     }
 
     private static bool TryCaptureShopNode(Node node)

@@ -12,24 +12,14 @@ namespace DwellTargeting;
 /// </summary>
 internal static class UtilityBarOverlay
 {
-    private const long LookupRescanMs = 500;
-
     private static bool _active;
     private static NCombatUi? _cachedCombatUi;
     private static NTopBar? _cachedTopBar;
-    private static bool _combatUiLookupCached;
-    private static bool _topBarLookupCached;
-    private static long _combatUiLookupTick;
-    private static long _topBarLookupTick;
     private static readonly Dictionary<string, Rect2> _cachedRects = new();
     private static readonly Dictionary<string, Control> _cachedControls = new();
 
     internal static void InvalidateDiscoveryCache()
     {
-        _combatUiLookupCached = false;
-        _topBarLookupCached = false;
-        _combatUiLookupTick = 0;
-        _topBarLookupTick = 0;
         _cachedCombatUi = null;
         _cachedTopBar = null;
         _cachedRects.Clear();
@@ -212,18 +202,9 @@ internal static class UtilityBarOverlay
         if (_cachedTopBar != null && NodeQuery.IsLive(_cachedTopBar))
             return;
 
-        long now = System.Environment.TickCount64;
-        if (_topBarLookupCached && now - _topBarLookupTick < LookupRescanMs)
-            return;
-
-        _cachedTopBar = null;
         var tree = Engine.GetMainLoop() as SceneTree;
         if (tree?.Root == null)
-        {
-            _topBarLookupCached = true;
-            _topBarLookupTick = now;
             return;
-        }
 
         foreach (var bar in NodeQuery.FindAll<NTopBar>(tree.Root))
         {
@@ -232,11 +213,8 @@ internal static class UtilityBarOverlay
 
             _cachedTopBar = bar;
             ModLogger.Info("Utility bar: cached NTopBar for run.");
-            break;
+            return;
         }
-
-        _topBarLookupCached = true;
-        _topBarLookupTick = now;
     }
 
     private static void EnsureCombatUiCached()
@@ -244,18 +222,9 @@ internal static class UtilityBarOverlay
         if (_cachedCombatUi != null && NodeQuery.IsLive(_cachedCombatUi))
             return;
 
-        long now = System.Environment.TickCount64;
-        if (_combatUiLookupCached && now - _combatUiLookupTick < LookupRescanMs)
-            return;
-
-        _cachedCombatUi = null;
         var tree = Engine.GetMainLoop() as SceneTree;
         if (tree?.Root == null)
-        {
-            _combatUiLookupCached = true;
-            _combatUiLookupTick = now;
             return;
-        }
 
         foreach (var ui in NodeQuery.FindAll<NCombatUi>(tree.Root))
         {
@@ -264,20 +233,25 @@ internal static class UtilityBarOverlay
 
             _cachedCombatUi = ui;
             ModLogger.Info("Utility bar: cached NCombatUi for combat.");
-            break;
+            return;
         }
-
-        _combatUiLookupCached = true;
-        _combatUiLookupTick = now;
     }
 
     private static bool TryGetNativeControl(string id, out Control control)
     {
         control = null!;
+        var mode = OverlayModeService.GetMode();
         if (id is "draw" or "discard" or "exhaust")
+        {
+            if (mode is not (OverlayMode.CombatPlay or OverlayMode.HandSelect))
+                return false;
+
             EnsureCombatUiCached();
+        }
         else
+        {
             EnsureTopBarCached();
+        }
 
         Control? found = id switch
         {

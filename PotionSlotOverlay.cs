@@ -12,10 +12,8 @@ namespace DwellTargeting;
 internal static class PotionSlotOverlay
 {
     private const float SlotPadding = 8f;
-    private const long RescanMs = 500;
 
     private static List<(Rect2 Bounds, Control Slot, int SlotIndex)>? _targets;
-    private static long _nextRescanTick;
 
     internal static void Sync()
     {
@@ -25,12 +23,15 @@ internal static class PotionSlotOverlay
             return;
         }
 
-        long now = System.Environment.TickCount64;
-        if (_targets != null && now < _nextRescanTick)
+        if (_targets != null)
             return;
 
-        _nextRescanTick = now + RescanMs;
         RebuildTargets();
+    }
+
+    internal static void InvalidateCache()
+    {
+        _targets = null;
     }
 
     internal static void CollectDwellTargets(List<DwellHoverService.Target> targets)
@@ -55,7 +56,6 @@ internal static class PotionSlotOverlay
     internal static void Hide()
     {
         _targets = null;
-        _nextRescanTick = 0;
     }
 
     private static void RebuildTargets()
@@ -147,7 +147,10 @@ internal static class PotionSlotOverlay
         }
 
         if (InputForwardService.TryActivateControl(slot))
+        {
             ModLogger.Info($"[Potion] slot {slotIndex} '{slot.Name}' activated.");
+            PotionPopupOverlay.RequestScan();
+        }
         else
             ModLogger.Warn($"[Potion] slot {slotIndex} activation failed.");
     }

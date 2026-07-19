@@ -41,6 +41,8 @@ internal static class ModLogger
         FlushTimer = new Timer(_ => Flush(), null, FlushIntervalMs, FlushIntervalMs);
     }
 
+    internal static string LogFilePath => LogPath;
+
     internal static void Info(string message) => Enqueue("INFO", message, print: false);
 
     internal static void Warn(string message) => Enqueue("WARN", message, print: true);

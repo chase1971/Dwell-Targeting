@@ -1,0 +1,77 @@
+---
+description: Live mod health snapshot + offline scan-state tests for sts2-dwell-targeting. AI reads health JSON while game runs; runs unit tests before scan-state edits.
+globs:
+  - sts2-dwell-targeting/**
+alwaysApply: false
+---
+
+# STS2 Dwell Targeting — AI health + test workflow
+
+Chase does not read telemetry. **The agent** uses these sources to understand live mod state and catch regressions.
+
+## Chase reports bugs (no screenshots required)
+
+When something is broken, Chase stays on that screen and says a short phrase, e.g.:
+
+- **"campfire broken"** / **"smith broken"** / **"upgrade screen broken"**
+
+The agent reads (in order):
+
+1. `%APPDATA%\SlayTheSpire2\logs\dwell-targeting-health.json` — if `updatedUtc` is within **60 seconds**
+2. Log tail from `logPath` in that JSON
+
+Do **not** ask Chase to screenshot unless health JSON is stale or missing.
+
+## While the game is running (always-on)
+
+Every ~3 seconds the mod writes:
+
+`%APPDATA%\SlayTheSpire2\logs\dwell-targeting-health.json`
+
+**When working on this mod** (overlay bugs, FPS, missing targets, scan lifecycle), read this file first if `updatedUtc` is within the last **60 seconds** — that means STS2 is likely running with the mod loaded.
+
+Interpret key fields:
+
+| Field | Healthy static screen | Problem signal |
+|-------|----------------------|----------------|
+| `findAllCallsPerFrame` | ~0 | ≥ 0.5 → rescan storm (tree walk every frame) |
+| `nodesVisitedPerFrame` | low / 0 | very high → FPS killer |
+| `overlayMode` | matches screen | Room on smith grid → mode detection bug |
+| `targets.pileCards` | > 0 on upgrade grid | 0 → cards not scanned |
+| `targets.roomButtons` | > 0 on campfire | 0 → Rest/Smith scan stuck |
+| `targets.hasBack` | true on sub-screens | false → back overlay missing |
+| `targets.hasViewUpgrades` | true on smith grid | false → toggle not found |
+| `targets.confirmOnly` | true only after card picked | true on fresh grid → confirm suppression bug |
+| `alerts` | `[]` | non-empty → read and act on each string |
+| `screenHint` | human-readable expectation | compare to `targets` |
+
+Also skim the log tail (`logPath` in JSON) for `[WARN]`, `[Mode]`, `[Pile]`, `[Room]`, and repeated snapshot lines.
+
+## Before changing scan-state code (offline)
+
+Run **before** install when editing:
+
+- `ScreenEntryScanState.cs`, `ScanRuntime.cs`, `ScreenScanTiming.cs`
+- Overlays using `_entryScan` (Room, Map, Shop, Event, CharacterSelect)
+
+```powershell
+dotnet test tests/DwellTargeting.Tests.csproj
+```
+
+All tests must pass. If red, fix before `install.ps1`.
+
+## After code changes
+
+1. `dotnet test` (if scan-state touched)
+2. `dotnet build` + `install.ps1`
+3. Ask Chase to restart STS2 if DLL changed
+4. Re-read `dwell-targeting-health.json` after they reproduce the screen
+
+## Two tools, two jobs
+
+| Tool | Runs when | Catches |
+|------|-----------|---------|
+| `dotnet test` | Agent, before install | Logic bugs (retry-forever, give-up doesn't quiet) |
+| `dwell-targeting-health.json` | Game running | Live FPS storms, zero targets, wrong mode, per-overlay gaps |
+
+Do not ask Chase to run either unless the game or test command failed on the agent side.

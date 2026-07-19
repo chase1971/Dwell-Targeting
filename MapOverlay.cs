@@ -1,122 +1,130 @@
-using Godot;
-using MegaCrit.Sts2.Core.Map;
-using MegaCrit.Sts2.Core.Nodes.CommonUi;
-using MegaCrit.Sts2.Core.Nodes.GodotExtensions;
-using MegaCrit.Sts2.Core.Nodes.Screens.Map;
-
-namespace DwellTargeting;
-
-/// <summary>
-/// Map screen helpers: dwell targets over travelable nodes and direct dwell on Proceed/Skip.
-/// Hover scroll is handled by <see cref="ViewScrollOverlay"/>.
-/// </summary>
-internal static class MapOverlay
-{
-    private const float ProceedHitboxPadding = 24f;
-
-    private static NMapScreen? _screen;
-    private static List<NMapPoint>? _cachedPoints;
-    private static NProceedButton? _proceedButton;
-    private static ulong _cachedScreenId;
-
-    internal static void Sync()
-    {
-        _screen = OverlayModeService.GetCachedMapScreen();
-        if (_screen == null)
-        {
-            Hide();
-            return;
-        }
-
-        ulong screenId = _screen.GetInstanceId();
-        if (_cachedPoints != null && _cachedScreenId == screenId)
-            return;
-
-        _cachedScreenId = screenId;
-        _cachedPoints = FindTravelablePoints(_screen);
-        _proceedButton = FindProceedButton();
-    }
-
-    internal static void CollectDwellTargets(List<DwellHoverService.Target> targets)
-    {
-        if (_screen == null || !NodeQuery.IsLive(_screen) || _cachedPoints == null)
-            return;
-
-        int slot = 1;
-        foreach (var point in _cachedPoints)
-        {
-            if (!NodeQuery.IsLive(point) || !NodeQuery.IsVisible(point) || point.State != MapPointState.Travelable)
-                continue;
-
-            if (!ControlHitboxService.TryGetDwellRect(point, out var rect))
-                continue;
-
-            var captured = point;
-            targets.Add(DwellHoverService.Card(rect, () => MapSelectionService.TrySelect(captured), $"MapNode:{slot}"));
-            slot++;
-        }
-
-        if (TryGetProceedRect(out var proceedRect))
-            targets.Add(DwellHoverService.Menu(proceedRect, ActivateProceed, "MapProceed"));
-    }
-
-    internal static void Hide()
-    {
-        _screen = null;
-        _cachedPoints = null;
-        _proceedButton = null;
-        _cachedScreenId = 0;
-    }
-
-    private static NProceedButton? FindProceedButton()
-    {
-        var root = (Engine.GetMainLoop() as SceneTree)?.Root;
-        if (root == null)
-            return null;
-
-        foreach (var button in NodeQuery.FindAll<NProceedButton>(root))
-        {
-            if (!NodeQuery.IsLive(button) || !NodeQuery.IsVisible(button))
-                continue;
-            if (button is NClickableControl { IsEnabled: false })
-                continue;
-
-            return button;
-        }
-
-        return null;
-    }
-
-    private static bool TryGetProceedRect(out Rect2 rect)
-    {
-        rect = default;
-        if (_proceedButton == null || !NodeQuery.IsLive(_proceedButton) || !NodeQuery.IsVisible(_proceedButton))
-            return false;
-
-        if (_proceedButton is NClickableControl { IsEnabled: false })
-            return false;
-
-        rect = _proceedButton.GetGlobalRect();
-        if (rect.Size.X < 8f || rect.Size.Y < 8f)
-            return false;
-
-        rect = rect.Grow(ProceedHitboxPadding);
-        return true;
-    }
-
-    private static void ActivateProceed()
-    {
-        if (_proceedButton == null || !NodeQuery.IsLive(_proceedButton))
-        {
-            ModLogger.Warn("[Map] Proceed dwell fired but proceed button missing/dead.");
-            return;
-        }
-
-        RewardSelectionService.TryProceed(_proceedButton);
-    }
-
-    private static List<NMapPoint> FindTravelablePoints(NMapScreen screen) =>
-        NodeQuery.FindAll<NMapPoint>(screen)
-            .Where(p => NodeQuery.IsVisible(p) && p.State == MapPointState.Travelable)
-            .ToList();
-}
+using Godot;
+using MegaCrit.Sts2.Core.Map;
+using MegaCrit.Sts2.Core.Nodes.CommonUi;
+using MegaCrit.Sts2.Core.Nodes.GodotExtensions;
+using MegaCrit.Sts2.Core.Nodes.Screens.Map;
+
+namespace DwellTargeting;
+
+/// <summary>
+/// Map screen helpers: dwell targets over travelable nodes and direct dwell on Proceed/Skip.
+/// Hover scroll is handled by <see cref="ViewScrollOverlay"/>.
+/// </summary>
+internal static class MapOverlay
+{
+    private const float ProceedHitboxPadding = 24f;
+
+    private static NMapScreen? _screen;
+    private static List<NMapPoint>? _cachedPoints;
+    private static NProceedButton? _proceedButton;
+    private static ScreenEntryScanState _entryScan;
+
+    internal static void Sync()
+    {
+        _screen = OverlayModeService.GetCachedMapScreen();
+        if (_screen == null)
+        {
+            Hide();
+            return;
+        }
+
+        ulong screenId = _screen.GetInstanceId();
+        bool hasValidCache = _cachedPoints is { Count: > 0 };
+        if (!_entryScan.ShouldScanNow(screenId, hasValidCache, out _))
+            return;
+
+        var points = FindTravelablePoints(_screen);
+        if (!_entryScan.RegisterScanResult(points.Count, "Map"))
+            return;
+
+        _cachedPoints = points;
+        _proceedButton = FindProceedButton();
+        ModLogger.Info($"[Map] layout snapshot — {_cachedPoints.Count} travel node(s).");
+    }
+
+    internal static void CollectDwellTargets(List<DwellHoverService.Target> targets)
+    {
+        if (_screen == null || !NodeQuery.IsLive(_screen) || _cachedPoints == null)
+            return;
+
+        int slot = 1;
+        foreach (var point in _cachedPoints)
+        {
+            if (!NodeQuery.IsLive(point) || !NodeQuery.IsVisible(point) || point.State != MapPointState.Travelable)
+                continue;
+
+            if (!ControlHitboxService.TryGetDwellRect(point, out var rect))
+                continue;
+
+            var captured = point;
+            targets.Add(DwellHoverService.Card(rect, () => MapSelectionService.TrySelect(captured), $"MapNode:{slot}"));
+            slot++;
+        }
+
+        if (TryGetProceedRect(out var proceedRect))
+            targets.Add(DwellHoverService.Menu(proceedRect, ActivateProceed, "MapProceed"));
+    }
+
+    internal static void Hide()
+    {
+        _screen = null;
+        _cachedPoints = null;
+        _proceedButton = null;
+        _entryScan.OnHide();
+    }
+
+    internal static void PrepareForEntry() => _entryScan.ScheduleRescan("Map");
+
+    private static NProceedButton? FindProceedButton()
+    {
+        var root = (Engine.GetMainLoop() as SceneTree)?.Root;
+        if (root == null)
+            return null;
+
+        foreach (var button in NodeQuery.FindAll<NProceedButton>(root))
+        {
+            if (!NodeQuery.IsLive(button) || !NodeQuery.IsVisible(button))
+                continue;
+            if (button is NClickableControl { IsEnabled: false })
+                continue;
+
+            return button;
+        }
+
+        return null;
+    }
+
+    private static bool TryGetProceedRect(out Rect2 rect)
+    {
+        rect = default;
+        if (_proceedButton == null || !NodeQuery.IsLive(_proceedButton) || !NodeQuery.IsVisible(_proceedButton))
+            return false;
+
+        if (_proceedButton is NClickableControl { IsEnabled: false })
+            return false;
+
+        rect = _proceedButton.GetGlobalRect();
+        if (rect.Size.X < 8f || rect.Size.Y < 8f)
+            return false;
+
+        rect = rect.Grow(ProceedHitboxPadding);
+        return true;
+    }
+
+    private static void ActivateProceed()
+    {
+        if (_proceedButton == null || !NodeQuery.IsLive(_proceedButton))
+        {
+            ModLogger.Warn("[Map] Proceed dwell fired but proceed button missing/dead.");
+            return;
+        }
+
+        RewardSelectionService.TryProceed(_proceedButton);
+    }
+
+    private static List<NMapPoint> FindTravelablePoints(NMapScreen screen) =>
+        NodeQuery.FindAll<NMapPoint>(screen)
+            .Where(p => NodeQuery.IsVisible(p) && p.State == MapPointState.Travelable)
+            .ToList();
+}
+

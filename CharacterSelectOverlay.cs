@@ -15,7 +15,7 @@ internal static class CharacterSelectOverlay
     private static Control? _confirmButton;
     private static List<(Rect2 Bounds, Control Button, int Slot)>? _dwellTargets;
     private static Rect2 _confirmBounds;
-    private static ulong _cachedScreenId;
+    private static ScreenEntryScanState _entryScan;
 
     internal static bool IsActive()
     {
@@ -41,11 +41,12 @@ internal static class CharacterSelectOverlay
         }
 
         ulong screenId = _screen.GetInstanceId();
-        if (_dwellTargets != null && _cachedScreenId == screenId && _dwellTargets.Count > 0)
+        if (!_entryScan.ShouldScanNow(screenId, _dwellTargets is { Count: > 0 }, out _))
             return;
 
-        _cachedScreenId = screenId;
         RebuildTargets();
+        if (!_entryScan.RegisterScanResult(_dwellTargets?.Count ?? 0, "CharacterSelect"))
+            return;
     }
 
     internal static void CollectDwellTargets(List<DwellHoverService.Target> targets)
@@ -94,8 +95,10 @@ internal static class CharacterSelectOverlay
         _confirmButton = null;
         _dwellTargets = null;
         _confirmBounds = default;
-        _cachedScreenId = 0;
+        _entryScan.OnHide();
     }
+
+    internal static void PrepareForEntry() => _entryScan.ScheduleRescan("CharacterSelect");
 
     private static void RebuildTargets()
     {

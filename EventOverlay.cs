@@ -28,6 +28,7 @@ internal static class EventOverlay
     private static ulong _cachedRoomId;
     private static int _cachedOptionSignature;
     private static bool _lastShowVisuals = true;
+    private static ScreenEntryScanState _entryScan;
     private const long RescanMs = 250;
     private static long _lastRescanTick;
 
@@ -39,6 +40,14 @@ internal static class EventOverlay
     {
         _cachedOptionSignature = int.MinValue;
         _lastRescanTick = 0;
+        _cachedButtons = null;
+        _dwellTargets = null;
+    }
+
+    internal static void PrepareForEntry()
+    {
+        InvalidateCache();
+        _entryScan.ScheduleRescan("Event");
     }
 
     internal static void Sync()
@@ -56,24 +65,36 @@ internal static class EventOverlay
 
         ulong roomId = _room.GetInstanceId();
         long now = System.Environment.TickCount64;
-        var freshButtons = FindOptionButtons(_room);
-        int optionSignature = ComputeOptionSignature(freshButtons);
-        bool hasOptionTargets = _usesOffsetNumbers && _dwellTargets is { Count: > 0 };
-        bool hasProceedOnly = freshButtons.Count == 0
-            && _proceedControl != null
+
+        bool hasProceedOnly = _proceedControl != null
             && NodeQuery.IsLive(_proceedControl)
             && NodeQuery.IsVisible(_proceedControl);
+        bool hasValidCache = (_usesOffsetNumbers && _dwellTargets is { Count: > 0 }) || hasProceedOnly;
 
-        if (_cachedRoomId == roomId
-            && !showChanged
-            && optionSignature == _cachedOptionSignature
-            && (hasOptionTargets || hasProceedOnly)
-            && now - _lastRescanTick < RescanMs)
+        if (!_entryScan.ShouldScanNow(roomId, hasValidCache, out _))
         {
-            if (!hasOptionTargets)
+            if (!(_usesOffsetNumbers && _dwellTargets is { Count: > 0 }))
                 HideNumberButtons();
             return;
         }
+
+        var freshButtons = FindOptionButtons(_room);
+        int optionSignature = ComputeOptionSignature(freshButtons);
+        hasProceedOnly = freshButtons.Count == 0 && FindProceedControl() is { } proceed && NodeQuery.IsVisible(proceed);
+
+        if (optionSignature == _cachedOptionSignature
+            && !showChanged
+            && hasValidCache
+            && now - _lastRescanTick < RescanMs)
+        {
+            if (!(_usesOffsetNumbers && _dwellTargets is { Count: > 0 }))
+                HideNumberButtons();
+            return;
+        }
+
+        int resultCount = freshButtons.Count > 0 ? freshButtons.Count : (hasProceedOnly ? 1 : 0);
+        if (!_entryScan.RegisterScanResult(resultCount, "Event"))
+            return;
 
         _lastRescanTick = now;
         _cachedOptionSignature = optionSignature;
@@ -122,6 +143,7 @@ internal static class EventOverlay
         _cachedOptionSignature = int.MinValue;
         _lastShowVisuals = true;
         _lastRescanTick = 0;
+        _entryScan.OnHide();
         HideNumberButtons();
     }
 

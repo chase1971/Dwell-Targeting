@@ -9,15 +9,14 @@ namespace DwellTargeting;
 /// <summary>
 /// Direct dwell on title-menu buttons — no offset numbers. When a blocking submenu dialog
 /// (e.g. Quit Game Yes/No) is open, menu targets are replaced with dialog confirm buttons only.
+/// Scans once when the title menu appears; rescan only after a menu button is activated (dialog/submenu).
 /// </summary>
 internal static class MainMenuOverlay
 {
-    private const long LayoutRescanMs = 250;
-
+    private static NMainMenu? _cachedMenu;
     private static List<(Rect2 Bounds, Control Button, int Slot)>? _dwellTargets;
     private static ulong _cachedMenuId;
-    private static int _cachedLayoutKey;
-    private static long _lastRescanTick;
+    private static bool _needsRescan = true;
     private static bool _inDialogMode;
 
     internal static bool IsActive()
@@ -25,14 +24,28 @@ internal static class MainMenuOverlay
         if (RunManager.Instance.IsInProgress)
             return false;
 
-        return FindMainMenu() != null;
+        return _cachedMenu != null
+            && NodeQuery.IsLive(_cachedMenu)
+            && NodeQuery.IsVisible(_cachedMenu);
     }
 
     internal static bool IsDialogOpen() => _inDialogMode;
 
+    internal static void InvalidateCache()
+    {
+        _needsRescan = true;
+        _dwellTargets = null;
+    }
+
     internal static void Sync()
     {
-        if (RunManager.Instance.IsInProgress || !IsActive())
+        if (RunManager.Instance.IsInProgress)
+        {
+            Hide();
+            return;
+        }
+
+        if (!EnsureMenuCached())
         {
             Hide();
             return;
@@ -40,33 +53,17 @@ internal static class MainMenuOverlay
 
         LegacyOverlayCleanup.RemoveMainMenuCanvas();
 
-        var menu = FindMainMenu();
-        if (menu == null)
-        {
-            Hide();
-            return;
-        }
-
-        ulong menuId = menu.GetInstanceId();
-        long now = System.Environment.TickCount64;
-        bool dialogOpen = TryFindBlockingDialogButtons(menu, out var dialogButtons);
-        int layoutKey = ComputeLayoutKey(menuId, dialogOpen, dialogButtons);
-
-        bool cacheValid = _dwellTargets is { Count: > 0 }
-            && _cachedMenuId == menuId
-            && _cachedLayoutKey == layoutKey;
-
-        if (cacheValid && now - _lastRescanTick < LayoutRescanMs)
+        ulong menuId = _cachedMenu!.GetInstanceId();
+        if (_dwellTargets is { Count: > 0 } && _cachedMenuId == menuId && !_needsRescan)
             return;
 
-        _lastRescanTick = now;
+        _needsRescan = false;
         _cachedMenuId = menuId;
-        _cachedLayoutKey = layoutKey;
 
-        if (dialogOpen)
+        if (TryFindBlockingDialogButtons(_cachedMenu, out var dialogButtons))
             RebuildDialogTargets(dialogButtons);
         else
-            RebuildMenuTargets(menu);
+            RebuildMenuTargets(_cachedMenu);
     }
 
     internal static void CollectDwellTargets(List<DwellHoverService.Target> targets)
@@ -91,12 +88,26 @@ internal static class MainMenuOverlay
 
     internal static void Hide()
     {
+        _cachedMenu = null;
         _dwellTargets = null;
         _cachedMenuId = 0;
-        _cachedLayoutKey = 0;
-        _lastRescanTick = 0;
+        _needsRescan = true;
         _inDialogMode = false;
         LegacyOverlayCleanup.RemoveMainMenuCanvas();
+    }
+
+    private static bool EnsureMenuCached()
+    {
+        if (_cachedMenu != null && NodeQuery.IsLive(_cachedMenu) && NodeQuery.IsVisible(_cachedMenu))
+            return true;
+
+        _cachedMenu = FindMainMenu();
+        if (_cachedMenu == null)
+            return false;
+
+        _needsRescan = true;
+        _dwellTargets = null;
+        return true;
     }
 
     private static string ResolveTargetLabel(Control button, int slot)
@@ -138,19 +149,6 @@ internal static class MainMenuOverlay
             return text;
 
         return button.Name;
-    }
-
-    private static int ComputeLayoutKey(ulong menuId, bool dialogOpen, List<Control> dialogButtons)
-    {
-        int key = (int)menuId;
-        key = HashCode.Combine(key, dialogOpen ? 1 : 0);
-        if (!dialogOpen)
-            return key;
-
-        foreach (var button in dialogButtons)
-            key = HashCode.Combine(key, (int)button.GetInstanceId());
-
-        return key;
     }
 
     private static void RebuildMenuTargets(NMainMenu menu)
@@ -231,8 +229,7 @@ internal static class MainMenuOverlay
             CollectDialogButtons(stack, buttons);
         }
 
-        var root = (Engine.GetMainLoop() as SceneTree)?.Root;
-        if (buttons.Count < 2 && root != null)
+        if (buttons.Count < 2)
             CollectDialogButtons(menu, buttons);
 
         if (buttons.Count < 2)
@@ -384,7 +381,10 @@ internal static class MainMenuOverlay
         }
 
         if (InputForwardService.TryActivateControl(button))
+        {
             ModLogger.Info($"[MainMenu] option {slot} '{button.Name}' activated.");
+            InvalidateCache();
+        }
         else
             ModLogger.Warn($"[MainMenu] option {slot} activation failed.");
     }

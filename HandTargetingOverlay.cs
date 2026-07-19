@@ -18,6 +18,8 @@ internal static class HandTargetingOverlay
     private static bool _pauseMenuOpenThisFrame;
     private static bool _blockingMenuOpenThisFrame;
     private static bool _wasPauseMenuOpenForDwell;
+    private static bool _wasSettingsOpenForCache;
+    private static bool _pileSubScreenWasOpen;
 
     /// <summary>How a screen mode treats the left / hover scroll strips when it becomes active.</summary>
     private enum ScrollStripHide
@@ -93,6 +95,7 @@ internal static class HandTargetingOverlay
         }
 
         OverlayVisToggle.CollectDwellTargets(targets);
+        ManualRescanOverlay.CollectDwellTargets(targets);
 
         if (GameOverlayVisibility.ShouldHideOverlays(_blockingMenuOpenThisFrame))
             return;
@@ -115,8 +118,7 @@ internal static class HandTargetingOverlay
 
         BackButtonOverlay.CollectDwellTargets(targets);
 
-        if (!CardConfirmPhaseQuery.IsActive())
-            DeckViewOverlay.CollectDwellTargets(targets);
+        DeckViewOverlay.CollectDwellTargets(targets);
 
         var confirm = ConfirmOverlay.GetDwellTarget();
         if (confirm != null)
@@ -249,10 +251,16 @@ internal static class HandTargetingOverlay
         GameOverlayVisibility.InvalidateCache();
         PauseMenuOverlay.InvalidateLookupCache();
         UtilityBarOverlay.InvalidateDiscoveryCache();
+        PotionSlotOverlay.InvalidateCache();
+        BackButtonOverlay.InvalidateLookup();
+        PotionPopupOverlay.InvalidateLookup();
+        CardConfirmPhaseQuery.InvalidateCache();
+        MainMenuOverlay.InvalidateCache();
     }
 
     private static void OnProcessFrame()
     {
+        ModHealthReporter.BeginFrame();
         long frameStart = OverlayPerfDiagnostics.BeginTick();
         try
         {
@@ -260,6 +268,11 @@ internal static class HandTargetingOverlay
 
             SettingsOverlay.UpdateFrame();
             OverlayVisToggle.UpdateFrame();
+            ManualRescanOverlay.UpdateFrame();
+            if (_wasSettingsOpenForCache && !SettingsOverlay.IsOpen)
+                InvalidateDiscoveryCaches();
+            _wasSettingsOpenForCache = SettingsOverlay.IsOpen;
+
             ModManagerSettingsBridge.TryHydrateFromPersistedValues();
             SettingsStore.MaybeReload();
             ModConfigScrollHarmonizer.Sync(_blockingMenuOpenThisFrame);
@@ -267,7 +280,11 @@ internal static class HandTargetingOverlay
             if (_pauseMenuOpenThisFrame)
             {
                 if (!_wasPauseMenuOpenForDwell)
+                {
                     DwellHoverService.Reset();
+                    // Back (NBackButton) can appear with pause over a room; don't keep an earlier absent cache.
+                    BackButtonOverlay.InvalidateLookup();
+                }
 
                 _wasPauseMenuOpenForDwell = true;
                 SuppressDuringPause();
@@ -283,7 +300,7 @@ internal static class HandTargetingOverlay
             if (GameOverlayVisibility.ShouldHideOverlays(_blockingMenuOpenThisFrame))
             {
                 SuppressForMenu();
-                FinalizeDwellTargets();
+                FinalizeSuppressedMenuDwellTargets();
                 return;
             }
 
@@ -302,17 +319,27 @@ internal static class HandTargetingOverlay
 
             if (mode == OverlayMode.None)
             {
-                if (!showUtility && MainMenuOverlay.IsActive())
+                if (!showUtility)
                 {
-                    _isTornDown = false;
                     MainMenuOverlay.Sync();
-                    CharacterSelectOverlay.Hide();
-                }
-                else if (!showUtility && CharacterSelectOverlay.IsActive())
-                {
-                    _isTornDown = false;
-                    CharacterSelectOverlay.Sync();
-                    MainMenuOverlay.Hide();
+                    if (MainMenuOverlay.IsActive())
+                    {
+                        _isTornDown = false;
+                        CharacterSelectOverlay.Hide();
+                    }
+                    else if (CharacterSelectOverlay.IsActive())
+                    {
+                        _isTornDown = false;
+                        CharacterSelectOverlay.Sync();
+                        MainMenuOverlay.Hide();
+                    }
+                    else
+                    {
+                        MainMenuOverlay.Hide();
+                        CharacterSelectOverlay.Hide();
+                        if (!_isTornDown)
+                            TearDown();
+                    }
                 }
                 else
                 {
@@ -353,10 +380,16 @@ internal static class HandTargetingOverlay
 
                 ViewScreenQuery.Invalidate();
                 InvalidateDiscoveryCaches();
+                ScreenOverlayInvalidator.OnModeEntered(mode);
 
                 _isTornDown = false;
                 _activeOverlayMode = mode;
             }
+
+            bool pileSubScreenOpen = OverlayModeService.TryGetPileSelectScreen(out _);
+            if (_pileSubScreenWasOpen && !pileSubScreenOpen && mode == OverlayMode.Room)
+                RoomOverlay.PrepareForEntry();
+            _pileSubScreenWasOpen = pileSubScreenOpen;
 
             OverlayCanvasHost.EnsureInputRouter();
 
@@ -442,6 +475,7 @@ internal static class HandTargetingOverlay
         }
         finally
         {
+            ModHealthReporter.EndFrame();
             OverlayPerfDiagnostics.EndFrame(frameStart);
         }
     }
@@ -459,6 +493,23 @@ internal static class HandTargetingOverlay
             PotionSlotOverlay.CollectDwellTargets(dwellTargets);
             DwellDebugOverlay.Render(dwellTargets);
             DwellHoverService.ProcessFrame(dwellTargets, GetProcessDelta());
+            ModHealthReporter.NoteFrame(OverlayMode.None, dwellTargets.Count, "pauseMenuOpen=true");
+        }
+        finally
+        {
+            OverlayPerfDiagnostics.AddCategory("dwell", dwellStart);
+        }
+    }
+
+    private static void FinalizeSuppressedMenuDwellTargets()
+    {
+        long dwellStart = OverlayPerfDiagnostics.BeginTick();
+        try
+        {
+            var dwellTargets = new List<DwellHoverService.Target>();
+            DwellDebugOverlay.Render(dwellTargets);
+            DwellHoverService.ProcessFrame(dwellTargets, GetProcessDelta());
+            ModHealthReporter.NoteFrame(_activeOverlayMode, 0, "overlaysSuppressed=true");
         }
         finally
         {
@@ -486,6 +537,7 @@ internal static class HandTargetingOverlay
             long processStart = OverlayPerfDiagnostics.BeginTick();
             DwellHoverService.ProcessFrame(dwellTargets, GetProcessDelta());
             OverlayPerfDiagnostics.Add("dwell.process", processStart);
+            ModHealthReporter.NoteFrame(_activeOverlayMode, dwellTargets.Count, OverlayModeService.DebugSnapshot(), dwellTargets);
         }
         finally
         {

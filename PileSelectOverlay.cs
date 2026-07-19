@@ -1,6 +1,7 @@
 using Godot;
 using MegaCrit.Sts2.Core.Nodes.Cards.Holders;
 using MegaCrit.Sts2.Core.Nodes.Screens;
+using MegaCrit.Sts2.Core.Nodes.Screens.CardSelection;
 
 namespace DwellTargeting;
 
@@ -9,7 +10,14 @@ namespace DwellTargeting;
 /// </summary>
 internal static class PileSelectOverlay
 {
-    private const long LayoutSettleMs = 1000;
+    internal static bool IsScrollableGridScreen(Node screen) =>
+        screen is NCardGridSelectionScreen or NChooseACardSelectionScreen or NDeckUpgradeSelectScreen;
+
+    internal static void PrepareForEntry()
+    {
+        _awaitingConfirm = false;
+        _cachedScreen = null;
+    }
 
     private static Node? _cachedScreen;
     private static List<NCardHolder>? _cachedHolders;
@@ -24,10 +32,51 @@ internal static class PileSelectOverlay
     private static bool _proceedSnapshotTaken;
     private static bool _confirmSnapshotTaken;
     private static bool _loggedButtonTypes;
+    private static int _emptyLayoutRetries;
+    private static bool _awaitingConfirm;
+
+    internal static bool IsAwaitingConfirm() => _awaitingConfirm;
+
+    internal static bool IsInConfirmOnlyPhase() => _awaitingConfirm || _confirmSnapshotTaken;
+
+    internal static void RefreshConfirmPhaseLookups()
+    {
+        if (!IsInConfirmOnlyPhase())
+            return;
+
+        CardConfirmPhaseQuery.InvalidateCache();
+        BackButtonOverlay.InvalidateLookup();
+        DeckViewOverlay.RefreshToggleLookup();
+        _cachedDwellTargets = null;
+        _confirmSnapshotTaken = true;
+        _pickSnapshotTaken = true;
+        ModLogger.Info("[Pile] confirm phase lookups refreshed (cards stay suppressed).");
+    }
+
+    internal static void ForceRescan()
+    {
+        if (IsInConfirmOnlyPhase())
+        {
+            RefreshConfirmPhaseLookups();
+            return;
+        }
+
+        _awaitingConfirm = false;
+        _cachedScreen = null;
+        CardConfirmPhaseQuery.InvalidateCache();
+    }
 
     /// <summary>Card pick finished — drop card overlays and snapshot proceed once it appears.</summary>
     internal static void NotifyPickCompleted()
     {
+        if (OverlayModeService.TryGetPileSelectScreen(out var screen)
+            && screen is NDeckUpgradeSelectScreen)
+        {
+            EnterAwaitingConfirmPhase();
+            return;
+        }
+
+        _awaitingConfirm = false;
         _pickSnapshotTaken = false;
         _proceedSnapshotTaken = false;
         _confirmSnapshotTaken = false;
@@ -52,7 +101,7 @@ internal static class PileSelectOverlay
             return;
         }
 
-        if (CardConfirmPhaseQuery.IsActive())
+        if (CardConfirmPhaseQuery.IsActive() || _awaitingConfirm)
         {
             if (!_confirmSnapshotTaken)
                 TakeConfirmSnapshot();
@@ -69,6 +118,13 @@ internal static class PileSelectOverlay
 
         if (_pickSnapshotTaken && _proceedSnapshotTaken)
             return;
+
+        if (_pickSnapshotTaken && (_cachedDwellTargets == null || _cachedDwellTargets.Count == 0))
+        {
+            if (System.Environment.TickCount64 >= _layoutReadyAtMs)
+                RetryLayoutSnapshot(screen);
+            return;
+        }
 
         if (_pickSnapshotTaken)
         {
@@ -117,6 +173,7 @@ internal static class PileSelectOverlay
 
     internal static void Hide()
     {
+        _awaitingConfirm = false;
         _cachedScreen = null;
         _cachedHolders = null;
         _cachedCardControls = null;
@@ -140,6 +197,19 @@ internal static class PileSelectOverlay
         ModLogger.Info("[Pile] confirm-only phase — card pick overlays suppressed.");
     }
 
+    private static void EnterAwaitingConfirmPhase()
+    {
+        _awaitingConfirm = true;
+        _cachedDwellTargets = null;
+        _pickSnapshotTaken = true;
+        _confirmSnapshotTaken = false;
+        _proceedSettleScheduled = false;
+        _proceedReadyAtMs = 0;
+        CardConfirmPhaseQuery.InvalidateCache();
+        BackButtonOverlay.InvalidateLookup();
+        ModLogger.Info("[Pile] upgrade card picked — waiting for confirm/back overlays.");
+    }
+
     internal static bool TryRouteClick(Vector2 globalPos, out string message)
     {
         message = string.Empty;
@@ -156,11 +226,29 @@ internal static class PileSelectOverlay
         _cachedDwellTargets = null;
         _pickSnapshotTaken = false;
         _proceedSnapshotTaken = false;
-        _loggedButtonTypes = false;
+        _confirmSnapshotTaken = false;
         _proceedReadyAtMs = 0;
         _proceedSettleScheduled = false;
-        _layoutReadyAtMs = System.Environment.TickCount64 + LayoutSettleMs;
-        ModLogger.Info($"[Pile] waiting {LayoutSettleMs}ms for card fan-out before layout snapshot.");
+        _loggedButtonTypes = false;
+        _emptyLayoutRetries = 0;
+        _layoutReadyAtMs = System.Environment.TickCount64 + ScreenScanTiming.LayoutSettleMs;
+        CardConfirmPhaseQuery.InvalidateCache();
+        BackButtonOverlay.InvalidateLookup();
+        DeckViewOverlay.PrepareForEntry();
+        ModLogger.Info($"[Pile] waiting {ScreenScanTiming.LayoutSettleMs}ms for card fan-out before layout snapshot.");
+    }
+
+    private static void RetryLayoutSnapshot(Node screen)
+    {
+        _ = screen;
+        _pickSnapshotTaken = false;
+        _cachedDwellTargets = null;
+        if (_emptyLayoutRetries >= ScreenScanTiming.MaxEmptyRetries)
+            return;
+
+        _emptyLayoutRetries++;
+        _layoutReadyAtMs = System.Environment.TickCount64 + ScreenScanTiming.EmptyRetryMs;
+        ModLogger.Info($"[Pile] retrying layout snapshot ({_emptyLayoutRetries}/{ScreenScanTiming.MaxEmptyRetries}).");
     }
 
     /// <summary>True while the game is still offering pickable cards (not skip/proceed alone).</summary>
@@ -211,8 +299,16 @@ internal static class PileSelectOverlay
             _cachedHolders is { Count: > 0 } ? _cachedHolders : null,
             _cachedCardControls is { Count: > 0 } ? _cachedCardControls : null,
             _cachedSkipControls);
+
+        if (_cachedDwellTargets.Count == 0)
+        {
+            RetryLayoutSnapshot(screen);
+            return;
+        }
+
         _pickSnapshotTaken = true;
         _proceedSnapshotTaken = false;
+        _emptyLayoutRetries = 0;
 
         ModLogger.Info(
             $"[Pile] layout snapshot — dwell targets={_cachedDwellTargets.Count} " +

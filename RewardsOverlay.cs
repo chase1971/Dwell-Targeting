@@ -156,6 +156,8 @@ internal static class RewardsOverlay
         ClearTargets();
     }
 
+    internal static void PrepareForEntry() => ClearTargets();
+
     private static void ClearTargets()
     {
         _cachedDwellTargets = null;

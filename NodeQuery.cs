@@ -43,6 +43,7 @@ internal static class NodeQuery
         FindAllRecursive(start, found, ref visited);
         OverlayPerfDiagnostics.Count("tree.findAllCalls");
         OverlayPerfDiagnostics.Count("tree.nodesVisited", visited);
+        ModHealthReporter.NoteTreeWalk(visited);
         return found;
     }
 

@@ -11,6 +11,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Remove="tests\**\*.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Reference Include="sts2">
       <HintPath>$(GameDataDir)/sts2.dll</HintPath>
       <Private>false</Private>

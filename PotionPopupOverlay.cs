@@ -18,6 +18,18 @@ internal static class PotionPopupOverlay
     private static readonly Dictionary<ulong, PopupSideButton> _sideButtons = new();
     private static ulong _cachedPopupId;
     private static NPotionPopup? _cachedPopup;
+    private static bool _scanPending;
+
+    internal static void RequestScan()
+    {
+        _scanPending = true;
+    }
+
+    internal static void InvalidateLookup()
+    {
+        _scanPending = false;
+        Hide();
+    }
 
     internal static void Sync()
     {
@@ -30,6 +42,14 @@ internal static class PotionPopupOverlay
         }
 
         _cachedPopup = null;
+
+        if (!_scanPending)
+        {
+            Hide();
+            return;
+        }
+
+        _scanPending = false;
         if (!TryGetVisiblePopup(out var popup))
         {
             Hide();

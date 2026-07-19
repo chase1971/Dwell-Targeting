@@ -1,5 +1,19 @@
 # Dwell Targeting — Session Log
 
+## 2026-07-19 — Campfire/smith mode fix, deck cards, manual scan, health telemetry
+
+**Files changed:** OverlayModeService.cs, PileSelectOverlay.cs, CardConfirmPhaseQuery.cs, RoomOverlay.cs, BackButtonOverlay.cs, DeckViewOverlay.cs (~298), HandTargetingOverlay.cs (~696), ManualRescanService/Overlay (new), ModHealthReporter.cs (new), PilePreviewQuery.cs (new), ScreenEntryScanState.cs + ScanRuntime.cs (new), tests/ (6 green), ScreenOverlayInvalidator.cs, ViewScreenQuery.cs, plus scan-state migrations (Room/Map/Event/Shop)
+
+**What worked:** Root-cause fix for smith upgrade stuck in Room mode — pile sub-screens now win mode detection; upgrade preview enters confirm-only (Back + Confirm + View Upgrades, no background PickCard). Back button no longer poisons absent on first miss. Full deck view now scans DeckCard overlays with live rects for scroll. Manual **Scan** button (phase-aware — confirm preview refreshes buttons only, does not re-scan grid). Live `dwell-targeting-health.json` + per-target breakdown for AI debugging without screenshots. Offline unit tests for ScreenEntryScanState (6/6 pass). Installed to STS2 mods folder.
+
+**Current state:** Green — installed; user smoke-test pending on campfire → smith → preview → back loop and deck view cards.
+
+**File size flag:** HandTargetingOverlay.cs ~696 lines — extract before next feature batch. DeckViewOverlay.cs ~298 lines.
+
+**Next session:** User verify smith preview (Back/Confirm/View Upgrades + Scan on preview). Address RESCAN_STORM / ~11k nodes/frame on pile screens if FPS still dips. Tier-2 record/replay for NDeckUpgradeSelectScreen optional.
+
+---
+
 ## 2026-07-18 — Screen phases, events, chest exploit, quit dialog
 
 **Files changed:** MainMenuOverlay.cs (new), CardConfirmPhaseQuery.cs (new), EventOverlay.cs, PileSelectOverlay.cs, HandSelectOverlay.cs, RoomOverlay.cs, DeckViewOverlay.cs, ViewScrollOverlay.cs, HandTargetingOverlay.cs, EventSelectionService.cs, plus prior session batch (ProceedTargetBuilder, PotionSlotOverlay, PauseMenuOverlay, UtilityBarOverlay, RewardsOverlay, ShopOverlay, etc.)

@@ -37,8 +37,14 @@ internal static class PauseMenuOverlay
             return _cachedPauseMenu != null && NodeQuery.IsVisible(_cachedPauseMenu);
 
         _cachedPauseMenu = FindPauseMenu();
-        _lookupCached = true;
-        _lastLookupTick = now;
+        if (_cachedPauseMenu != null)
+        {
+            _lookupCached = true;
+            _lastLookupTick = now;
+        }
+        else
+            _lookupCached = false;
+
         return _cachedPauseMenu != null && NodeQuery.IsVisible(_cachedPauseMenu);
     }
 
@@ -54,7 +60,7 @@ internal static class PauseMenuOverlay
 
         LegacyOverlayCleanup.RemovePauseMenuCanvas();
 
-        if (_wasOpen && _dwellTargets != null)
+        if (_wasOpen && _dwellTargets is { Count: > 0 })
             return;
 
         _wasOpen = true;

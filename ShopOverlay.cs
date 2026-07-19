@@ -29,6 +29,7 @@ internal static class ShopOverlay
     private static NProceedButton? _proceedButton;
     private static ulong _cachedShopId;
     private static bool _cachedInventoryOpen;
+    private static ScreenEntryScanState _entryScan;
 
     private static CanvasLayer? _layer;
     private static Control? _root;
@@ -45,7 +46,11 @@ internal static class ShopOverlay
 
         ulong shopId = _shopRoot.GetInstanceId();
         bool inventoryOpen = ShopInventoryQuery.IsInventoryOpen(ResolveSearchRoot(_shopRoot));
-        if (_cardControls != null && _cachedShopId == shopId && _cachedInventoryOpen == inventoryOpen)
+        bool hasValidCache = HasValidDiscovery()
+            && _cachedShopId == shopId
+            && _cachedInventoryOpen == inventoryOpen;
+
+        if (!_entryScan.ShouldScanNow(shopId, hasValidCache, out _))
         {
             if (_numberedControls is { Count: > 0 })
                 SyncNumberButtons();
@@ -57,6 +62,9 @@ internal static class ShopOverlay
         _cachedShopId = shopId;
         _cachedInventoryOpen = inventoryOpen;
         Rescan(_shopRoot);
+
+        if (!_entryScan.RegisterScanResult(CountDiscoveryTargets(), "Shop"))
+            return;
 
         if (_numberedControls is { Count: > 0 })
             SyncNumberButtons();
@@ -114,8 +122,31 @@ internal static class ShopOverlay
         _proceedButton = null;
         _cachedShopId = 0;
         _cachedInventoryOpen = false;
+        _entryScan.OnHide();
         HideNumberButtons();
     }
+
+    internal static void InvalidateDiscovery()
+    {
+        _cardControls = null;
+        _numberedControls = null;
+        _removalControls = null;
+        _merchantButtonControls = null;
+        _characterControls = null;
+        _proceedButton = null;
+        _entryScan.ScheduleRescan("Shop");
+    }
+
+    private static bool HasValidDiscovery() =>
+        _cardControls != null
+        && (CountDiscoveryTargets() > 0 || _proceedButton != null);
+
+    private static int CountDiscoveryTargets() =>
+        (_merchantButtonControls?.Count ?? 0)
+        + (_characterControls?.Count ?? 0)
+        + (_cardControls?.Count ?? 0)
+        + (_removalControls?.Count ?? 0)
+        + (_numberedControls?.Count ?? 0);
 
     internal static bool TryRouteClick(Vector2 globalPos, out string message)
     {
