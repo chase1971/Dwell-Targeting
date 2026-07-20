@@ -17,6 +17,13 @@ internal static class CardConfirmPhaseQuery
     private static bool _confirmPresent;
     private static Control? _cachedConfirmButton;
     private static ulong _cachedScreenId;
+    private static long _lastLookupTick;
+    private const long LookupRetryMs = 500;
+
+    // IsActive() is polled several times per frame from multiple overlays. Memoize the result per
+    // process frame so the underlying (visibility-pruned) scans run at most once per frame.
+    private static ulong _activeFrame = ulong.MaxValue;
+    private static bool _activeResult;
 
     internal static void InvalidateCache()
     {
@@ -24,9 +31,29 @@ internal static class CardConfirmPhaseQuery
         _confirmPresent = false;
         _cachedConfirmButton = null;
         _cachedScreenId = 0;
+        _lastLookupTick = 0;
+        _activeFrame = ulong.MaxValue;
     }
 
     internal static bool IsActive()
+    {
+        ulong frame = Engine.GetProcessFrames();
+        if (frame == _activeFrame)
+            return _activeResult;
+
+        _activeFrame = frame;
+        _activeResult = ComputeIsActive();
+        return _activeResult;
+    }
+
+    /// <summary>
+    /// Only a real committed selection counts — never a mere hover preview. The smith / upgrade
+    /// screen shows a large centered card while the cursor hovers a grid card; treating that as
+    /// "confirm phase" wrongly suppressed every grid overlay. The reliable signals are the mod's own
+    /// dwell-pick (<see cref="PileSelectOverlay.IsAwaitingConfirm"/>) and an actual selected-card
+    /// container in the tree.
+    /// </summary>
+    private static bool ComputeIsActive()
     {
         var mode = OverlayModeService.GetMode();
         if (mode is not (OverlayMode.HandSelect or OverlayMode.PileSelect))
@@ -41,15 +68,11 @@ internal static class CardConfirmPhaseQuery
 
         if (mode == OverlayMode.PileSelect)
         {
-            if (!_confirmPresent)
-                return false;
-
-            if (PileSelectOverlay.IsAwaitingConfirm() || PilePreviewQuery.IsUpgradeConfirmFlowActive())
+            if (PileSelectOverlay.IsAwaitingConfirm())
                 return true;
 
             return OverlayModeService.TryGetPileSelectScreen(out var pileScreen)
-                && (HasPileSelectionPreview(pileScreen)
-                    || PilePreviewQuery.HasLargeCenterPreviewCards(pileScreen));
+                && HasPileSelectionPreview(pileScreen);
         }
 
         return HasSelectedCardPreview();
@@ -77,11 +100,18 @@ internal static class CardConfirmPhaseQuery
     private static void EnsureLookup(OverlayMode mode)
     {
         ulong screenId = ResolveScreenId(mode);
+        long now = System.Environment.TickCount64;
+
+        // Confirm buttons appear after the player picks a card — do not cache "absent" forever.
         if (_lookupValid && _cachedScreenId == screenId)
-            return;
+        {
+            if (_confirmPresent || now - _lastLookupTick < LookupRetryMs)
+                return;
+        }
 
         _cachedScreenId = screenId;
         _lookupValid = true;
+        _lastLookupTick = now;
         _confirmPresent = TryFindConfirmButton(out _cachedConfirmButton);
     }
 
@@ -106,7 +136,7 @@ internal static class CardConfirmPhaseQuery
         if (hand == null || !NodeQuery.IsLive(hand))
             return false;
 
-        foreach (var container in NodeQuery.FindAll<NSelectedHandCardContainer>(hand))
+        foreach (var container in NodeQuery.FindAllVisible<NSelectedHandCardContainer>(hand))
         {
             if (container is Control control && NodeQuery.IsVisible(control))
                 return true;
@@ -117,17 +147,7 @@ internal static class CardConfirmPhaseQuery
 
     private static bool HasPileSelectionPreview(Node pileScreen)
     {
-        foreach (var container in NodeQuery.FindAll<NSelectedHandCardContainer>(pileScreen))
-        {
-            if (container is Control control && NodeQuery.IsVisible(control))
-                return true;
-        }
-
-        var root = (Engine.GetMainLoop() as SceneTree)?.Root;
-        if (root == null)
-            return false;
-
-        foreach (var container in NodeQuery.FindAll<NSelectedHandCardContainer>(root))
+        foreach (var container in NodeQuery.FindAllVisible<NSelectedHandCardContainer>(pileScreen))
         {
             if (container is Control control && NodeQuery.IsVisible(control))
                 return true;
@@ -180,13 +200,13 @@ internal static class CardConfirmPhaseQuery
 
     private static IEnumerable<Control> EnumerateConfirmCandidates(Node root)
     {
-        foreach (var confirm in NodeQuery.FindAll<NConfirmButton>(root))
+        foreach (var confirm in NodeQuery.FindAllVisible<NConfirmButton>(root))
         {
             if (confirm is Control control && IsUsableConfirm(control))
                 yield return control;
         }
 
-        foreach (var confirm in NodeQuery.FindAll<NMiscConfirmButton>(root))
+        foreach (var confirm in NodeQuery.FindAllVisible<NMiscConfirmButton>(root))
         {
             if (confirm is Control control && IsUsableConfirm(control))
                 yield return control;

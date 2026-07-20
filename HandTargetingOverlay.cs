@@ -96,6 +96,7 @@ internal static class HandTargetingOverlay
 
         OverlayVisToggle.CollectDwellTargets(targets);
         ManualRescanOverlay.CollectDwellTargets(targets);
+        FeedbackBeaconOverlay.CollectDwellTargets(targets);
 
         if (GameOverlayVisibility.ShouldHideOverlays(_blockingMenuOpenThisFrame))
             return;
@@ -269,6 +270,7 @@ internal static class HandTargetingOverlay
             SettingsOverlay.UpdateFrame();
             OverlayVisToggle.UpdateFrame();
             ManualRescanOverlay.UpdateFrame();
+            FeedbackBeaconOverlay.UpdateFrame();
             if (_wasSettingsOpenForCache && !SettingsOverlay.IsOpen)
                 InvalidateDiscoveryCaches();
             _wasSettingsOpenForCache = SettingsOverlay.IsOpen;
@@ -445,10 +447,12 @@ internal static class HandTargetingOverlay
                 EndTurnOverlay.Hide();
                 EnemyLabelOverlay.Hide();
                 CombatRowsCoordinator.Clear();
+                HandSelectAuxOverlay.Sync();
                 if (CardConfirmPhaseQuery.IsActive())
                 {
                     ConfirmOverlay.Hide();
                     HandSelectOverlay.Hide();
+                    HandSelectAuxOverlay.Hide();
                 }
                 else
                 {
@@ -459,6 +463,7 @@ internal static class HandTargetingOverlay
             else
             {
                 HandSelectOverlay.Hide();
+                HandSelectAuxOverlay.Hide();
                 ConfirmOverlay.Hide();
                 EndTurnOverlay.Sync(visible: true);
                 CombatRowsCoordinator.SyncCombatPlay(hand, OverlayCanvasHost.FallbackRoot);
@@ -560,6 +565,7 @@ internal static class HandTargetingOverlay
     private static void SyncScreenMode(ScreenOverlay active)
     {
         HandSelectOverlay.Hide();
+        HandSelectAuxOverlay.Hide();
         HandInputBlocker.Release();
         MouseCardPlayBlocker.Release();
         HandLayoutDiagnostics.Reset();
@@ -631,6 +637,7 @@ internal static class HandTargetingOverlay
         ShopOverlay.Hide();
         RoomOverlay.Hide();
         HandSelectOverlay.Hide();
+        HandSelectAuxOverlay.Hide();
         CombatRowsCoordinator.Clear();
         _isTornDown = true;
         _activeOverlayMode = OverlayMode.None;
@@ -655,6 +662,7 @@ internal static class HandTargetingOverlay
         RoomOverlay.Hide();
         BackButtonOverlay.Hide();
         HandSelectOverlay.Hide();
+        HandSelectAuxOverlay.Hide();
         PauseMenuOverlay.Hide();
         MainMenuOverlay.Hide();
         CharacterSelectOverlay.Hide();
@@ -683,6 +691,7 @@ internal static class HandTargetingOverlay
         RoomOverlay.Hide();
         BackButtonOverlay.Hide();
         HandSelectOverlay.Hide();
+        HandSelectAuxOverlay.Hide();
         PauseMenuOverlay.Hide();
         MainMenuOverlay.Hide();
         CharacterSelectOverlay.Hide();

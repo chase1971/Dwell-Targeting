@@ -35,13 +35,11 @@ internal static class RoomOverlay
         }
 
         ulong roomId = _room.GetInstanceId();
-        bool hasValidCache = _cachedButtons is { Count: > 0 };
-        if (!_entryScan.ShouldScanNow(roomId, hasValidCache, out _))
+        if (!_entryScan.ShouldScan(roomId))
             return;
 
         var found = FindButtons(_room);
-        if (!_entryScan.RegisterScanResult(found.Count, "Room"))
-            return;
+        _entryScan.MarkScanned(found.Count, "Room");
 
         _cachedButtons = found.Count > 0 ? found : null;
         if (_cachedButtons != null)
@@ -142,8 +140,7 @@ internal static class RoomOverlay
         if (!NodeQuery.IsLive(room))
             return list;
 
-        var root = (Engine.GetMainLoop() as SceneTree)?.Root;
-        bool postOpenTreasure = room is NTreasureRoom && HasVisibleSkip(root);
+        bool postOpenTreasure = room is NTreasureRoom && HasVisibleSkip(room);
 
         foreach (var button in NodeQuery.FindAll<NRestSiteButton>(room))
             TryAdd(list, button, isProceed: false);
@@ -167,21 +164,18 @@ internal static class RoomOverlay
             }
         }
 
-        if (root != null)
-        {
-            foreach (var button in NodeQuery.FindAll<NProceedButton>(root))
-                TryAdd(list, button, isProceed: true);
-        }
+        foreach (var button in NodeQuery.FindAllVisible<NProceedButton>(room))
+            TryAdd(list, button, isProceed: true);
 
         return list;
     }
 
-    private static bool HasVisibleSkip(Node? root)
+    private static bool HasVisibleSkip(Node room)
     {
-        if (root == null)
+        if (!NodeQuery.IsLive(room))
             return false;
 
-        foreach (var skip in CardPickTargetQuery.FindSkipControls(root))
+        foreach (var skip in CardPickTargetQuery.FindSkipControls(room))
         {
             if (NodeQuery.IsLive(skip) && NodeQuery.IsVisible(skip))
                 return true;

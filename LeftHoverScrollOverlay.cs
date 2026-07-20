@@ -30,6 +30,7 @@ internal static class LeftHoverScrollOverlay
     private static int _scrollFrameCounter;
     private static long _nextScrollLogTick;
     private static string _activeTag = string.Empty;
+    private const float ScrollRatePerFrame = 1f / 6f;
 
     internal static void SyncMap()
     {
@@ -55,6 +56,7 @@ internal static class LeftHoverScrollOverlay
     {
         _activeTag = string.Empty;
         _scrollFrameCounter = 0;
+        HoverScrollPacer.Reset();
 
         if (_root != null && NodeQuery.IsLive(_root))
             _root.Visible = false;
@@ -78,6 +80,7 @@ internal static class LeftHoverScrollOverlay
         if (mouse == null)
         {
             _scrollFrameCounter = 0;
+            HoverScrollPacer.Reset();
             return;
         }
 
@@ -94,17 +97,19 @@ internal static class LeftHoverScrollOverlay
         if (overUp && overDown)
         {
             _scrollFrameCounter = 0;
+            HoverScrollPacer.Reset();
             return;
         }
 
         if (!overUp && !overDown)
         {
             _scrollFrameCounter = 0;
+            HoverScrollPacer.Reset();
             return;
         }
 
         _scrollFrameCounter++;
-        if (_scrollFrameCounter % 6 != 0)
+        if (!HoverScrollPacer.TryConsumeScrollTick(ScrollRatePerFrame))
             return;
 
         MapScrollService.Scroll(overUp);

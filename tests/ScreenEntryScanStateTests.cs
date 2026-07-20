@@ -28,18 +28,16 @@ public sealed class ScreenEntryScanStateTests : IDisposable
     private void Advance(long ms) => _nowMs += ms;
 
     [Fact]
-    public void SettlesBeforeFirstScan()
+    public void SettlesBeforeFirstScanAfterForce()
     {
         var state = new ScreenEntryScanState();
         state.ScheduleRescan("Test");
 
         Advance(500);
-        Assert.False(state.ShouldScanNow(EntityA, hasValidCache: false, out var waiting));
-        Assert.True(waiting);
+        Assert.False(state.ShouldScan(EntityA));
 
         Advance(500);
-        Assert.True(state.ShouldScanNow(EntityA, hasValidCache: false, out waiting));
-        Assert.False(waiting);
+        Assert.True(state.ShouldScan(EntityA));
     }
 
     [Fact]
@@ -48,131 +46,98 @@ public sealed class ScreenEntryScanStateTests : IDisposable
         var state = new ScreenEntryScanState();
         state.ScheduleRescan("Test");
         Advance(ScreenScanTiming.LayoutSettleMs);
-        Assert.True(state.ShouldScanNow(EntityA, hasValidCache: false, out _));
+        Assert.True(state.ShouldScan(EntityA));
+        state.MarkScanned(1, "Test");
 
         Advance(ScreenScanTiming.LayoutSettleMs);
-        Assert.False(state.ShouldScanNow(EntityB, hasValidCache: false, out var waiting));
-        Assert.True(waiting);
+        Assert.False(state.ShouldScan(EntityB));
+
+        Advance(ScreenScanTiming.LayoutSettleMs);
+        Assert.True(state.ShouldScan(EntityB));
     }
 
     [Fact]
-    public void SuccessCachesAndGoesQuiet()
+    public void SuccessRespectsRescanInterval()
     {
         var state = new ScreenEntryScanState();
         state.ScheduleRescan("Test");
         Advance(ScreenScanTiming.LayoutSettleMs);
 
-        Assert.True(state.ShouldScanNow(EntityA, hasValidCache: false, out _));
-        Assert.True(state.RegisterScanResult(3, "Test"));
+        Assert.True(state.ShouldScan(EntityA));
+        state.MarkScanned(3, "Test");
 
-        for (int frame = 0; frame < 100; frame++)
-        {
-            Advance(16);
-            Assert.False(state.ShouldScanNow(EntityA, hasValidCache: true, out _));
-        }
+        Advance(ScreenScanTiming.RescanIntervalMs - 1);
+        Assert.False(state.ShouldScan(EntityA));
+
+        Advance(1);
+        Assert.True(state.ShouldScan(EntityA));
     }
 
     [Fact]
-    public void EmptyRetriesAreBoundedThenStop()
+    public void EmptyResultRetriesOnEmptyIntervalNeverGivesUp()
     {
         var state = new ScreenEntryScanState();
         state.ScheduleRescan("Test");
         Advance(ScreenScanTiming.LayoutSettleMs);
 
         int scanAttempts = 0;
-        while (true)
+        for (int i = 0; i < 20; i++)
         {
-            if (state.ShouldScanNow(EntityA, hasValidCache: false, out _))
+            if (state.ShouldScan(EntityA))
             {
                 scanAttempts++;
-                if (state.RegisterScanResult(0, "Test"))
-                    break;
+                state.MarkScanned(0, "Test");
+            }
 
-                Advance(ScreenScanTiming.EmptyRetryMs);
-            }
-            else
-            {
-                Advance(16);
-            }
+            Advance(ScreenScanTiming.EmptyRetryMs);
         }
 
-        Assert.Equal(ScreenScanTiming.MaxEmptyRetries + 1, scanAttempts);
-
-        for (int frame = 0; frame < 100; frame++)
-        {
-            Advance(16);
-            Assert.False(state.ShouldScanNow(EntityA, hasValidCache: false, out _));
-        }
+        Assert.True(scanAttempts >= 10);
     }
 
     [Fact]
-    public void ReArmAfterGiveUpStartsExactlyOneNewCycle()
+    public void ForceTriggersRescanAfterSettle()
     {
         var state = new ScreenEntryScanState();
-        ExhaustEmptyRetries(ref state);
+        Advance(ScreenScanTiming.LayoutSettleMs);
+        state.MarkScanned(5, "Test");
 
-        state.ScheduleRescan("Test");
+        Advance(ScreenScanTiming.RescanIntervalMs - 1);
+        Assert.False(state.ShouldScan(EntityA));
+
+        state.Force("Test");
         Advance(500);
-        Assert.False(state.ShouldScanNow(EntityA, hasValidCache: false, out var waiting));
-        Assert.True(waiting);
+        Assert.False(state.ShouldScan(EntityA));
 
         Advance(500);
-        Assert.True(state.ShouldScanNow(EntityA, hasValidCache: false, out waiting));
-        Assert.False(waiting);
+        Assert.True(state.ShouldScan(EntityA));
     }
 
     [Fact]
-    public void StaticFrameLoop_DoesNotRescanEveryFrameAfterGiveUp()
+    public void StaticFrameLoop_DoesNotRescanEveryFrameAfterSuccess()
     {
         var state = new ScreenEntryScanState();
         state.ScheduleRescan("Test");
         Advance(ScreenScanTiming.LayoutSettleMs);
 
         int shouldScanTrueCount = 0;
-        bool hasValidCache = false;
+        Assert.True(state.ShouldScan(EntityA));
+        state.MarkScanned(2, "Test");
 
-        for (int frame = 0; frame < 1000; frame++)
+        const int frames = 1000;
+        const long frameMs = 16;
+        for (int frame = 0; frame < frames; frame++)
         {
-            if (state.ShouldScanNow(EntityA, hasValidCache, out _))
+            Advance(frameMs);
+            if (state.ShouldScan(EntityA))
             {
                 shouldScanTrueCount++;
-                if (state.RegisterScanResult(0, "Test"))
-                    break;
-
-                Advance(ScreenScanTiming.EmptyRetryMs);
+                state.MarkScanned(2, "Test");
             }
-
-            Advance(16);
         }
 
-        for (int frame = 0; frame < 1000; frame++)
-        {
-            Advance(16);
-            if (state.ShouldScanNow(EntityA, hasValidCache, out _))
-                shouldScanTrueCount++;
-        }
-
-        Assert.InRange(shouldScanTrueCount, 1, ScreenScanTiming.MaxEmptyRetries + 1);
-        Assert.True(shouldScanTrueCount < 100, $"Expected bounded scans, got {shouldScanTrueCount}.");
-    }
-
-    private void ExhaustEmptyRetries(ref ScreenEntryScanState state)
-    {
-        state.ScheduleRescan("Test");
-        Advance(ScreenScanTiming.LayoutSettleMs);
-
-        while (true)
-        {
-            if (!state.ShouldScanNow(EntityA, hasValidCache: false, out _))
-            {
-                Advance(16);
-                continue;
-            }
-
-            if (state.RegisterScanResult(0, "Test"))
-                return;
-
-            Advance(ScreenScanTiming.EmptyRetryMs);
-        }
+        // Steady state rescans exactly once per RescanIntervalMs — never every frame.
+        long expected = (frames * frameMs) / ScreenScanTiming.RescanIntervalMs;
+        Assert.InRange(shouldScanTrueCount, expected - 3, expected + 3);
     }
 }

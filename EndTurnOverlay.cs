@@ -36,6 +36,12 @@ internal static class EndTurnOverlay
             return;
         }
 
+        if (OverlayModeService.TryGetPileSelectScreen(out _))
+        {
+            Hide();
+            return;
+        }
+
         EnsureNativeEndTurnCached();
         EnsureButton();
         if (_button == null)
@@ -61,6 +67,9 @@ internal static class EndTurnOverlay
 
     internal static DwellHoverService.Target? GetDwellTarget()
     {
+        if (OverlayModeService.TryGetPileSelectScreen(out _))
+            return null;
+
         if (_button == null || !NodeQuery.IsLive(_button) || _buttonBounds.Size.X < 1)
             return null;
 
@@ -70,6 +79,9 @@ internal static class EndTurnOverlay
     internal static void CollectNativeDwellTargets(List<DwellHoverService.Target> targets)
     {
         if (OverlayModeService.GetMode() != OverlayMode.CombatPlay)
+            return;
+
+        if (OverlayModeService.TryGetPileSelectScreen(out _))
             return;
 
         if (!RunManager.Instance.IsInProgress || !CombatManager.Instance.IsInProgress)
@@ -115,6 +127,7 @@ internal static class EndTurnOverlay
         _buttonBounds = new Rect2(0, 0, 0, 0);
         _cachedCombatUi = null;
         _cachedNativeButton = null;
+        EndTurnPlacement.InvalidatePlayerCache();
     }
 
     internal static void EnsureNativeEndTurnCached()
@@ -214,12 +227,10 @@ internal static class EndTurnOverlay
             return;
 
         var viewport = _button.GetViewportRect();
-        float centerX = viewport.Size.X * 0.5f;
-        float centerY = viewport.Size.Y * 0.52f;
-
         _button.ResetSize();
         var size = _button.GetCombinedMinimumSize();
-        _button.GlobalPosition = new Vector2(centerX - (size.X / 2f), centerY - (size.Y / 2f));
+        var center = EndTurnPlacement.ResolveCenter(viewport.Size, size);
+        _button.GlobalPosition = new Vector2(center.X - (size.X / 2f), center.Y - (size.Y / 2f));
         _button.Size = size;
         _buttonBounds = _button.GetGlobalRect();
     }

@@ -66,6 +66,8 @@ internal static class BackButtonOverlay
         ViewScreenQuery.Invalidate();
         DeckViewOverlay.NotifyClosed();
         RoomOverlay.PrepareForEntry();
+        PileSelectOverlay.NotifyBackedOut();
+        OverlayModeService.InvalidateCache();
 
         if (InputForwardService.TryActivateControl(button))
             ModLogger.Info($"Back button '{button.Name}' activated.");
@@ -79,7 +81,7 @@ internal static class BackButtonOverlay
         if (root == null)
             return null;
 
-        foreach (var button in NodeQuery.FindAll<NBackButton>(root))
+        foreach (var button in NodeQuery.FindAllVisible<NBackButton>(root))
         {
             if (button is not Control control || !NodeQuery.IsVisible(control))
                 continue;

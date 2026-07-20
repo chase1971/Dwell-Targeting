@@ -63,6 +63,7 @@ internal static class HandSelectOverlay
         if (CardConfirmPhaseQuery.IsActive())
         {
             CardConfirmPhaseQuery.CollectDwellTargets(targets);
+            HandSelectAuxOverlay.CollectDwellTargets(targets);
             return;
         }
 

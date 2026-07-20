@@ -29,6 +29,13 @@ internal static class ModConfigEntries
                 entryType, configTypeEnum),
 
             Separator(entryType, configTypeEnum),
+            Header("Map & Scroll", entryType, configTypeEnum),
+            Slider("hoverScrollSpeedScale", "Hover Scroll Speed", SettingsStore.Current.HoverScrollSpeedScale,
+                "How fast the map, deck, and card grids scroll when you hover the ▲▼ arrows. 1.0 = previous speed; 0.8 = default (~20% slower).",
+                v => SettingsStore.ApplyHoverScrollSpeedScale(Convert.ToSingle(v), persist: true, syncModConfig: false),
+                DwellSettings.MinHoverScrollSpeedScale, DwellSettings.MaxHoverScrollSpeedScale, 0.05f, "F2", entryType, configTypeEnum),
+
+            Separator(entryType, configTypeEnum),
             Header("Hover Time (seconds)", entryType, configTypeEnum),
             Slider("cardDwellSeconds", "Card Hover Time", SettingsStore.Current.CardDwellSeconds,
                 "Hand play numbers, enemy targets, card picks (rewards, discard, draw pile), and other card-shaped targets.",

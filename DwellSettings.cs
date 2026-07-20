@@ -25,6 +25,10 @@ internal sealed class DwellSettings
     public const int MaxTreeScanIntervalFrames = 120;
     public const int DefaultTreeScanIntervalFrames = 45;
 
+    public const float MinHoverScrollSpeedScale = 0.3f;
+    public const float MaxHoverScrollSpeedScale = 1.5f;
+    public const float DefaultHoverScrollSpeedScale = 0.8f;
+
     [JsonPropertyName("cardDwellSeconds")]
     public float CardDwellSeconds { get; set; } = DefaultCardDwellSeconds;
 
@@ -88,4 +92,8 @@ internal sealed class DwellSettings
     [JsonPropertyName("showOverlays")]
     /// <summary>In-game ON/OFF toggle beside map: hide drawn overlay visuals; dwell stays active.</summary>
     public bool ShowOverlays { get; set; } = true;
+
+    /// <summary>1.0 = previous scroll speed; 0.8 default (~20% slower).</summary>
+    [JsonPropertyName("hoverScrollSpeedScale")]
+    public float HoverScrollSpeedScale { get; set; } = DefaultHoverScrollSpeedScale;
 }

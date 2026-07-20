@@ -29,8 +29,6 @@ internal static class EventOverlay
     private static int _cachedOptionSignature;
     private static bool _lastShowVisuals = true;
     private static ScreenEntryScanState _entryScan;
-    private const long RescanMs = 250;
-    private static long _lastRescanTick;
 
     private static CanvasLayer? _layer;
     private static Control? _root;
@@ -39,7 +37,6 @@ internal static class EventOverlay
     internal static void InvalidateCache()
     {
         _cachedOptionSignature = int.MinValue;
-        _lastRescanTick = 0;
         _cachedButtons = null;
         _dwellTargets = null;
     }
@@ -64,14 +61,7 @@ internal static class EventOverlay
             _lastShowVisuals = SettingsStore.Current.ShowOverlays;
 
         ulong roomId = _room.GetInstanceId();
-        long now = System.Environment.TickCount64;
-
-        bool hasProceedOnly = _proceedControl != null
-            && NodeQuery.IsLive(_proceedControl)
-            && NodeQuery.IsVisible(_proceedControl);
-        bool hasValidCache = (_usesOffsetNumbers && _dwellTargets is { Count: > 0 }) || hasProceedOnly;
-
-        if (!_entryScan.ShouldScanNow(roomId, hasValidCache, out _))
+        if (!_entryScan.ShouldScan(roomId) && !showChanged)
         {
             if (!(_usesOffsetNumbers && _dwellTargets is { Count: > 0 }))
                 HideNumberButtons();
@@ -80,30 +70,17 @@ internal static class EventOverlay
 
         var freshButtons = FindOptionButtons(_room);
         int optionSignature = ComputeOptionSignature(freshButtons);
-        hasProceedOnly = freshButtons.Count == 0 && FindProceedControl() is { } proceed && NodeQuery.IsVisible(proceed);
-
-        if (optionSignature == _cachedOptionSignature
-            && !showChanged
-            && hasValidCache
-            && now - _lastRescanTick < RescanMs)
-        {
-            if (!(_usesOffsetNumbers && _dwellTargets is { Count: > 0 }))
-                HideNumberButtons();
-            return;
-        }
-
+        var proceed = FindProceedControl();
+        bool hasProceedOnly = freshButtons.Count == 0 && proceed != null && NodeQuery.IsVisible(proceed);
         int resultCount = freshButtons.Count > 0 ? freshButtons.Count : (hasProceedOnly ? 1 : 0);
-        if (!_entryScan.RegisterScanResult(resultCount, "Event"))
-            return;
 
-        _lastRescanTick = now;
+        _entryScan.MarkScanned(resultCount, "Event");
         _cachedOptionSignature = optionSignature;
-
         _cachedRoomId = roomId;
         _cachedButtons = freshButtons;
         _usesOffsetNumbers = _cachedButtons is { Count: > 0 };
         _ancientGoldStyle = UsesAncientGoldStyle(_room);
-        _proceedControl = FindProceedControl();
+        _proceedControl = proceed;
         RebuildNumberLayout();
 
         if (!_usesOffsetNumbers)
@@ -142,7 +119,6 @@ internal static class EventOverlay
         _cachedRoomId = 0;
         _cachedOptionSignature = int.MinValue;
         _lastShowVisuals = true;
-        _lastRescanTick = 0;
         _entryScan.OnHide();
         HideNumberButtons();
     }
@@ -410,18 +386,7 @@ internal static class EventOverlay
         _numberButtons.Clear();
     }
 
-    private static List<Control> FindOptionButtons(NEventRoom room)
-    {
-        var list = CollectOptionButtons(room);
-        if (list.Count > 0)
-            return list;
-
-        var root = (Engine.GetMainLoop() as SceneTree)?.Root;
-        if (root == null)
-            return list;
-
-        return CollectOptionButtons(root);
-    }
+    private static List<Control> FindOptionButtons(NEventRoom room) => CollectOptionButtons(room);
 
     private static List<Control> CollectOptionButtons(Node root)
     {

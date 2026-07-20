@@ -105,8 +105,11 @@ internal static class DeckViewOverlay
         if (_screen != null)
             return;
 
+        // Interval-gate the discovery walk. A pending scan request must NOT bypass the interval:
+        // when no deck view is open the request never clears, which made this walk the whole tree
+        // every frame. At most one visibility-pruned walk per retry window instead.
         long now = System.Environment.TickCount64;
-        if (!ViewScreenQuery.ShouldAttemptDeckLookup() && now - _lastDeckLookupTick < DeckLookupRetryMs)
+        if (now - _lastDeckLookupTick < DeckLookupRetryMs)
             return;
 
         _lastDeckLookupTick = now;
@@ -123,13 +126,11 @@ internal static class DeckViewOverlay
     private static void SyncDeckCards(NDeckViewScreen screen)
     {
         ulong screenId = screen.GetInstanceId();
-        bool hasCache = _cachedHolders is { Count: > 0 };
-        if (!_cardScan.ShouldScanNow(screenId, hasCache, out _))
+        if (!_cardScan.ShouldScan(screenId))
             return;
 
         var holders = FindDeckHolders(screen);
-        if (!_cardScan.RegisterScanResult(holders.Count, "DeckView"))
-            return;
+        _cardScan.MarkScanned(holders.Count, "DeckView");
 
         _cachedHolders = holders.Count > 0 ? holders : null;
         if (_cachedHolders != null)
@@ -250,7 +251,7 @@ internal static class DeckViewOverlay
         if (InputForwardService.TryActivateControl(toggle))
         {
             ModLogger.Info($"[DeckView] toggled '{toggle.Name}' ({toggle.GetType().Name}).");
-            _cardScan.ScheduleRescan("DeckView");
+            _cardScan.Force("DeckView");
         }
         else
             ModLogger.Warn($"[DeckView] toggle '{toggle.Name}' activation failed.");
@@ -262,7 +263,7 @@ internal static class DeckViewOverlay
         if (root == null)
             return null;
 
-        foreach (var screen in NodeQuery.FindAll<NDeckViewScreen>(root))
+        foreach (var screen in NodeQuery.FindAllVisible<NDeckViewScreen>(root))
         {
             if (NodeQuery.IsVisible(screen))
                 return screen;

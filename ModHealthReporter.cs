@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -105,21 +106,84 @@ internal static class ModHealthReporter
 
     internal static void EndFrame()
     {
-        if (!_frameNoted)
+        OverlayMode captureMode;
+        int captureTargets;
+        int captureFindAll;
+        int captureNodes;
+        lock (Lock)
         {
-            lock (Lock)
+            if (!_frameNoted)
             {
                 _windowFindAllCalls += _frameFindAllCalls;
                 _windowNodesVisited += _frameNodesVisited;
                 _windowFrames++;
             }
+
+            captureMode = _lastMode;
+            captureTargets = _lastDwellTargets;
+            captureFindAll = _frameFindAllCalls;
+            captureNodes = _frameNodesVisited;
         }
+
+        FrameFlightRecorder.Capture(
+            Environment.TickCount64,
+            captureMode,
+            captureTargets,
+            captureFindAll,
+            captureNodes,
+            Godot.Engine.GetFramesPerSecond());
 
         long now = Environment.TickCount64;
         if (now - _lastFlushMs < FlushIntervalMs)
             return;
 
         Flush(now);
+    }
+
+    internal static string BuildSnapshotText()
+    {
+        lock (Lock)
+        {
+            double frames = Math.Max(1, _windowFrames);
+            double findAllPerFrame = _windowFindAllCalls / frames;
+            double nodesPerFrame = _windowNodesVisited / frames;
+            var alerts = new List<string>();
+
+            if (findAllPerFrame >= 0.5)
+                alerts.Add("RESCAN_STORM");
+
+            if (nodesPerFrame >= 5000)
+                alerts.Add("HIGH_TREE_LOAD");
+
+            if (_lastDwellTargets == 0 && IsScreenModeExpectingTargets(_lastMode))
+                alerts.Add("NO_TARGETS");
+
+            AppendScreenSpecificAlerts(
+                alerts,
+                _lastMode,
+                _lastBreakdown,
+                DeckViewOverlay.IsOpen,
+                DeckViewOverlay.CachedDeckCardCount);
+
+            var sb = new StringBuilder();
+            sb.AppendLine($"  utc={DateTime.UtcNow:o}");
+            sb.AppendLine($"  gameInRun={TryGameInRun()}");
+            sb.AppendLine($"  overlayMode={_lastMode}");
+            sb.AppendLine($"  modeSnapshot={_lastModeSnapshot}");
+            sb.AppendLine($"  dwellTargets={_lastDwellTargets}");
+            sb.AppendLine($"  pileCards={_lastBreakdown.PileCards}");
+            sb.AppendLine($"  deckCards={_lastBreakdown.DeckCards}");
+            sb.AppendLine($"  roomButtons={_lastBreakdown.RoomButtons}");
+            sb.AppendLine($"  hasBack={_lastBreakdown.HasBack}");
+            sb.AppendLine($"  hasViewUpgrades={_lastBreakdown.HasViewUpgrades}");
+            sb.AppendLine($"  confirmOnly={_lastBreakdown.ConfirmOnly}");
+            sb.AppendLine($"  findAllCallsPerFrame={findAllPerFrame:F3}");
+            sb.AppendLine($"  nodesVisitedPerFrame={nodesPerFrame:F1}");
+            sb.AppendLine($"  fps={Godot.Engine.GetFramesPerSecond():F1}");
+            sb.AppendLine($"  alerts={(alerts.Count > 0 ? string.Join("; ", alerts) : "none")}");
+            sb.AppendLine($"  screenHint={DescribeScreen(_lastMode)}");
+            return sb.ToString().TrimEnd();
+        }
     }
 
     internal static void FlushNow() => Flush(Environment.TickCount64);

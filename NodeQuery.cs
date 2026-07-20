@@ -40,10 +40,21 @@ internal static class NodeQuery
             return found;
 
         int visited = 0;
-        FindAllRecursive(start, found, ref visited);
-        OverlayPerfDiagnostics.Count("tree.findAllCalls");
-        OverlayPerfDiagnostics.Count("tree.nodesVisited", visited);
-        ModHealthReporter.NoteTreeWalk(visited);
+        FindAllRecursive(start, found, ref visited, pruneInvisible: false);
+        NoteTreeWalk(visited);
+        return found;
+    }
+
+    /// <summary>Like FindAll but skips recursing into hidden CanvasItem subtrees.</summary>
+    internal static List<T> FindAllVisible<T>(Node start) where T : Node
+    {
+        var found = new List<T>();
+        if (!IsLive(start))
+            return found;
+
+        int visited = 0;
+        FindAllVisibleRecursive(start, found, ref visited);
+        NoteTreeWalk(visited);
         return found;
     }
 
@@ -98,7 +109,14 @@ internal static class NodeQuery
         }
     }
 
-    private static void FindAllRecursive<T>(Node node, List<T> found, ref int visited) where T : Node
+    private static void NoteTreeWalk(int visited)
+    {
+        OverlayPerfDiagnostics.Count("tree.findAllCalls");
+        OverlayPerfDiagnostics.Count("tree.nodesVisited", visited);
+        ModHealthReporter.NoteTreeWalk(visited);
+    }
+
+    private static void FindAllRecursive<T>(Node node, List<T> found, ref int visited, bool pruneInvisible) where T : Node
     {
         if (!IsLive(node))
             return;
@@ -108,10 +126,23 @@ internal static class NodeQuery
         if (node is T match)
             found.Add(match);
 
+        if (pruneInvisible && node is CanvasItem canvas && !IsVisible(canvas))
+            return;
+
+        RecurseChildren(node, found, ref visited, pruneInvisible);
+    }
+
+    private static void FindAllVisibleRecursive<T>(Node node, List<T> found, ref int visited) where T : Node
+    {
+        FindAllRecursive(node, found, ref visited, pruneInvisible: true);
+    }
+
+    private static void RecurseChildren<T>(Node node, List<T> found, ref int visited, bool pruneInvisible) where T : Node
+    {
         try
         {
             foreach (var child in node.GetChildren())
-                FindAllRecursive(child, found, ref visited);
+                FindAllRecursive(child, found, ref visited, pruneInvisible);
         }
         catch
         {

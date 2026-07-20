@@ -26,6 +26,7 @@ internal static class RewardsOverlay
     private static long _proceedReadyAtMs;
     private static long _nextProceedDiagTick;
     private static bool _lastInsideProceed;
+    private static ScreenEntryScanState _entryScan;
 
     internal static void Sync()
     {
@@ -43,9 +44,14 @@ internal static class RewardsOverlay
         }
 
         ulong screenId = rewardsScreen.GetInstanceId();
-        if (_cachedScreenId == screenId && _cachedDwellTargets is { Count: > 0 })
+        if (!_entryScan.ShouldScan(screenId))
             return;
 
+        TakeSnapshot(rewardsScreen, screenId);
+    }
+
+    private static void TakeSnapshot(NRewardsScreen rewardsScreen, ulong screenId)
+    {
         _rewards.Clear();
         foreach (var reward in RewardsScreenQuery.GetRewardButtons(rewardsScreen))
         {
@@ -59,20 +65,19 @@ internal static class RewardsOverlay
         {
             if (ProceedTargetBuilder.TryBuildFromRewardsScreen(rewardsScreen) == null)
             {
-                ClearTargets();
-                return;
-            }
+                if (_proceedReadyAtMs == 0)
+                {
+                    _proceedReadyAtMs = System.Environment.TickCount64 + ProceedTargetBuilder.SettleMs;
+                    ModLogger.Info(
+                        $"[Rewards] waiting {ProceedTargetBuilder.SettleMs}ms for proceed button before snapshot.");
+                }
 
-            if (_proceedReadyAtMs == 0)
-            {
-                _proceedReadyAtMs = System.Environment.TickCount64 + ProceedTargetBuilder.SettleMs;
-                ModLogger.Info(
-                    $"[Rewards] waiting {ProceedTargetBuilder.SettleMs}ms for proceed button before snapshot.");
-                return;
+                if (System.Environment.TickCount64 < _proceedReadyAtMs)
+                {
+                    _entryScan.MarkScanned(0, "Rewards");
+                    return;
+                }
             }
-
-            if (System.Environment.TickCount64 < _proceedReadyAtMs)
-                return;
         }
         else
         {
@@ -87,8 +92,10 @@ internal static class RewardsOverlay
             ? BuildLootCachedTargets(rewardsScreen)
             : ProceedTargetBuilder.TryBuildFromRewardsScreen(rewardsScreen);
 
-        ModLogger.Info(
-            $"[Rewards] phase={phase} snapshot — dwell targets={_cachedDwellTargets?.Count ?? 0}");
+        int count = _cachedDwellTargets?.Count ?? 0;
+        _entryScan.MarkScanned(count, "Rewards");
+
+        ModLogger.Info($"[Rewards] phase={phase} snapshot — dwell targets={count}");
 
         if (SettingsStore.Current.EnablePerfLogging)
             LogProceedDiagnostic();
@@ -154,9 +161,14 @@ internal static class RewardsOverlay
     {
         _rewards.Clear();
         ClearTargets();
+        _entryScan.OnHide();
     }
 
-    internal static void PrepareForEntry() => ClearTargets();
+    internal static void PrepareForEntry()
+    {
+        ClearTargets();
+        _entryScan.ScheduleRescan("Rewards");
+    }
 
     private static void ClearTargets()
     {
@@ -254,6 +266,7 @@ internal static class RewardsOverlay
             RewardSelectionService.TryClaim(reward);
 
         ClearTargets();
+        _entryScan.Force("Rewards");
     }
 
     private static bool TryMeasureItemRect(NRewardButton reward, out Rect2 rect)

@@ -141,6 +141,20 @@ internal static class SettingsStore
     internal static void ApplyShowHitboxOverlay(bool value, bool persist = true, bool syncModConfig = true) =>
         ApplyBool(v => _current.ShowHitboxOverlay = v, _current.ShowHitboxOverlay, value, "showHitboxOverlay", persist, syncModConfig);
 
+    internal static float GetHoverScrollSpeedScale() =>
+        Math.Clamp(_current.HoverScrollSpeedScale, DwellSettings.MinHoverScrollSpeedScale, DwellSettings.MaxHoverScrollSpeedScale);
+
+    internal static void ApplyHoverScrollSpeedScale(float value, bool persist = true, bool syncModConfig = true) =>
+        ApplyFloat(
+            v => _current.HoverScrollSpeedScale = v,
+            _current.HoverScrollSpeedScale,
+            value,
+            DwellSettings.MinHoverScrollSpeedScale,
+            DwellSettings.MaxHoverScrollSpeedScale,
+            "hoverScrollSpeedScale",
+            persist,
+            syncModConfig);
+
     internal static void ApplyShowOverlays(bool value, bool persist = true, bool syncModConfig = true) =>
         ApplyBool(v => _current.ShowOverlays = v, _current.ShowOverlays, value, "showOverlays", persist, syncModConfig);
 
@@ -253,6 +267,7 @@ internal static class SettingsStore
         _current.EndTurnDwellSeconds = Math.Clamp(_current.EndTurnDwellSeconds, DwellSettings.MinDwellSeconds, DwellSettings.MaxDwellSeconds);
         _current.MenuDwellSeconds = Math.Clamp(_current.MenuDwellSeconds, DwellSettings.MinDwellSeconds, DwellSettings.MaxDwellSeconds);
         _current.TreeScanIntervalFrames = Math.Clamp(_current.TreeScanIntervalFrames, DwellSettings.MinTreeScanIntervalFrames, DwellSettings.MaxTreeScanIntervalFrames);
+        _current.HoverScrollSpeedScale = Math.Clamp(_current.HoverScrollSpeedScale, DwellSettings.MinHoverScrollSpeedScale, DwellSettings.MaxHoverScrollSpeedScale);
     }
 
     private static void Reload(bool force)

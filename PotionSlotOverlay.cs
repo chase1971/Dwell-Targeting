@@ -34,6 +34,36 @@ internal static class PotionSlotOverlay
         _targets = null;
     }
 
+    internal static bool TryGetPotionBarRect(out Rect2 rect)
+    {
+        rect = default;
+        if (_targets == null || _targets.Count == 0)
+            return false;
+
+        bool any = false;
+        foreach (var (bounds, slot, _) in _targets)
+        {
+            if (!NodeQuery.IsLive(slot) || !NodeQuery.IsVisible(slot))
+                continue;
+
+            if (!any)
+            {
+                rect = bounds;
+                any = true;
+            }
+            else
+            {
+                float minX = Math.Min(rect.Position.X, bounds.Position.X);
+                float minY = Math.Min(rect.Position.Y, bounds.Position.Y);
+                float maxX = Math.Max(rect.End.X, bounds.End.X);
+                float maxY = Math.Max(rect.End.Y, bounds.End.Y);
+                rect = new Rect2(minX, minY, maxX - minX, maxY - minY);
+            }
+        }
+
+        return any && rect.Size.X >= 1f && rect.Size.Y >= 1f;
+    }
+
     internal static void CollectDwellTargets(List<DwellHoverService.Target> targets)
     {
         if (_targets == null)

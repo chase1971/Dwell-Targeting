@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dwell Targeting — Why It Keeps Breaking, and the Fix</title>
+<style>
+  :root{
+    --bg:#0e1116; --panel:#161b23; --panel2:#1d2530; --ink:#e8eef7; --muted:#9fb0c3;
+    --line:#2c3746; --good:#38d39f; --bad:#ff6b6b; --warn:#ffb454; --accent:#5db4ff;
+    --accent2:#b48cff;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font-family:"Segoe UI",system-ui,Arial,sans-serif; line-height:1.5;
+    padding:40px 24px 80px;
+  }
+  .wrap{max-width:1060px; margin:0 auto}
+  h1{font-size:34px; margin:0 0 6px; letter-spacing:.3px}
+  h1 .sub{display:block; font-size:17px; color:var(--muted); font-weight:400; margin-top:8px}
+  h2{font-size:15px; letter-spacing:2px; text-transform:uppercase; color:var(--accent);
+     margin:44px 0 16px; border-bottom:1px solid var(--line); padding-bottom:8px}
+  .card{background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:22px 24px}
+  .grid2{display:grid; grid-template-columns:1fr 1fr; gap:18px}
+  .grid3{display:grid; grid-template-columns:1fr 1fr 1fr; gap:18px}
+  @media(max-width:820px){.grid2,.grid3{grid-template-columns:1fr}}
+  .big{font-size:44px; font-weight:800; line-height:1}
+  .lbl{font-size:13px; letter-spacing:1px; text-transform:uppercase; color:var(--muted)}
+  .good{color:var(--good)} .bad{color:var(--bad)} .warn{color:var(--warn)} .accent{color:var(--accent)}
+  .pill{display:inline-block; padding:3px 10px; border-radius:999px; font-size:12px; font-weight:700;
+        letter-spacing:.5px}
+  .pill.good{background:rgba(56,211,159,.15); color:var(--good); border:1px solid rgba(56,211,159,.4)}
+  .pill.bad{background:rgba(255,107,107,.13); color:var(--bad); border:1px solid rgba(255,107,107,.4)}
+  p{margin:0 0 12px} .muted{color:var(--muted)}
+  .lead{font-size:18px}
+  code{background:#0a0d12; border:1px solid var(--line); border-radius:6px; padding:2px 7px;
+       font-family:"Cascadia Code",Consolas,monospace; font-size:13px; color:#cfe3ff}
+  .stepnum{display:inline-flex; width:30px;height:30px;align-items:center;justify-content:center;
+    border-radius:50%; background:var(--accent); color:#04121f; font-weight:800; margin-right:10px}
+  .flow{display:flex; align-items:stretch; gap:12px; flex-wrap:wrap}
+  .node{flex:1; min-width:150px; background:var(--panel2); border:1px solid var(--line);
+        border-radius:12px; padding:14px 16px}
+  .node h4{margin:0 0 6px; font-size:15px}
+  .node p{font-size:13px; color:var(--muted); margin:0}
+  .arrow{align-self:center; font-size:26px; color:var(--accent); font-weight:800}
+  .barwrap{background:#0a0d12; border:1px solid var(--line); border-radius:10px; height:46px;
+    display:flex; overflow:hidden; margin-top:10px}
+  .seg{display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:700; color:#04121f}
+  table{width:100%; border-collapse:collapse; margin-top:6px}
+  td,th{border-bottom:1px solid var(--line); padding:11px 8px; text-align:left; font-size:14px; vertical-align:top}
+  th{color:var(--muted); font-size:12px; letter-spacing:1px; text-transform:uppercase}
+  .tick{color:var(--good); font-weight:800} .cross{color:var(--bad); font-weight:800}
+  .callout{border-left:4px solid var(--warn); background:rgba(255,180,84,.08); padding:14px 18px;
+    border-radius:0 10px 10px 0}
+  .callout.good{border-color:var(--good); background:rgba(56,211,159,.08)}
+  .callout.bad{border-color:var(--bad); background:rgba(255,107,107,.08)}
+  ol.plan{list-style:none; padding:0; margin:0; counter-reset:s}
+  ol.plan li{background:var(--panel2); border:1px solid var(--line); border-radius:12px;
+    padding:16px 18px; margin-bottom:12px; display:flex; gap:14px; align-items:flex-start}
+  .foot{margin-top:40px; color:var(--muted); font-size:13px; text-align:center}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>Why the Dwell Mod Keeps Breaking — and How to Turn It Around
+    <span class="sub">The whack-a-mole isn't bad luck. It's one root cause repeating. Here's the model.</span>
+  </h1>
+
+  <!-- 1: THE MISCONCEPTION -->
+  <h2>1 · The one idea that changes everything</h2>
+  <div class="grid2">
+    <div class="card">
+      <span class="pill bad">WHAT WE ASSUMED</span>
+      <p class="lead" style="margin-top:14px">"The game can tell the mod when a screen opens or the state changes."</p>
+      <p class="muted">So we wrote code that waits to be <em>notified</em>, then scans. When the notice was missed, the overlay never appeared.</p>
+    </div>
+    <div class="card" style="border-color:rgba(56,211,159,.4)">
+      <span class="pill good">WHAT'S ACTUALLY TRUE</span>
+      <p class="lead" style="margin-top:14px">The game emits <span class="bad">nothing</span> to the mod. The mod is an <span class="accent">outside observer</span>.</p>
+      <p class="muted">The only way to know what's on screen is to <strong>look</strong> — walk the game's UI tree. There is no free clock, no notification. Timing must be <em>discovered</em>, and discovery costs a scan.</p>
+    </div>
+  </div>
+
+  <!-- 2: WHAT A SCAN COSTS -->
+  <h2>2 · What a "scan" really costs</h2>
+  <div class="card">
+    <p class="lead">A tree walk is not "look up a thing." It's <strong>visit every UI node in the game, one at a time</strong>, across the slow C#&#8596;engine boundary.</p>
+    <div class="grid3" style="margin-top:18px">
+      <div>
+        <div class="lbl">Your frame budget @ 60 FPS</div>
+        <div class="big accent">16.6<span style="font-size:20px">ms</span></div>
+        <div class="muted">Everything the mod does, 60× every second.</div>
+      </div>
+      <div>
+        <div class="lbl">Nodes in one full walk</div>
+        <div class="big warn">~3,000</div>
+        <div class="muted">× ~1.4 microseconds each = the cost below.</div>
+      </div>
+      <div>
+        <div class="lbl">Cost of ONE full walk</div>
+        <div class="big bad">~4<span style="font-size:20px">ms</span></div>
+        <div class="muted">A quarter of the whole frame — for a single scan.</div>
+      </div>
+    </div>
+    <div class="lbl" style="margin-top:22px">One frame, when 4 walks leak into "every frame" (this was your upgrade screen):</div>
+    <div class="barwrap">
+      <div class="seg" style="background:#ff6b6b; width:24%">walk 4ms</div>
+      <div class="seg" style="background:#ff8a5b; width:24%">walk 4ms</div>
+      <div class="seg" style="background:#ffb454; width:24%">walk 4ms</div>
+      <div class="seg" style="background:#ffd36b; width:24%">walk 4ms</div>
+      <div class="seg" style="background:#2c3746; width:4%; color:#9fb0c3">&nbsp;</div>
+    </div>
+    <p class="muted" style="margin-top:8px">≈ 17 ms &gt; 16.6 ms budget → <span class="bad">under 60 FPS.</span> The measured numbers from your log matched this almost exactly.</p>
+  </div>
+
+  <!-- 3: THE BUG PATTERN -->
+  <h2>3 · Every bug is the same shape</h2>
+  <div class="grid2">
+    <div class="card">
+      <p><strong>These two lines look identical to a reader:</strong></p>
+      <p><code>FindAll&lt;NPotion&gt;(root)</code> <span class="good">← in a cached path = free</span></p>
+      <p><code>FindAll&lt;NPotion&gt;(root)</code> <span class="bad">← runs every frame = disaster</span></p>
+      <p class="muted">The danger isn't in the line — it's in <em>how often the function around it runs</em>, which lives in a different file. That's why the cost is invisible and keeps getting underestimated.</p>
+    </div>
+    <div class="card">
+      <div class="callout bad">
+        <strong>The seesaw (your whack-a-mole):</strong>
+        <p style="margin:8px 0 0">You say <em>"overlays missing"</em> → safe fix = <span class="warn">scan more</span> → FPS drops.<br>
+        You say <em>"FPS dropped"</em> → safe fix = <span class="warn">scan less</span> → overlays go missing.</p>
+      </div>
+      <p class="muted" style="margin-top:12px">Each fix is correct for the complaint in front of it and quietly breaks the other side. Nobody is ever looking at <strong>both</strong> at once.</p>
+    </div>
+  </div>
+
+  <!-- 4: THE FIX MODEL -->
+  <h2>4 · The fix: one coordinator, computed once per frame</h2>
+  <div class="card">
+    <p class="lead">Stop letting ~10 overlays each poke the tree on their own. Derive the state <span class="good">ONCE, in ONE place</span>, and have everyone read the shared result.</p>
+
+    <div class="callout" style="margin:16px 0">
+      Split the two jobs you correctly identified:
+      <p style="margin:8px 0 0"><strong class="accent">WHEN to scan</strong> = owned centrally (timing). &nbsp;•&nbsp; <strong class="accent2">HOW to scan</strong> = owned by each overlay, but only runs <em>when the coordinator says so.</em></p>
+    </div>
+
+    <div class="flow">
+      <div class="node" style="border-color:rgba(93,180,255,.5)">
+        <h4 class="accent">① Coordinator</h4>
+        <p>Once per frame: one cheap, visibility-pruned look. Produces a snapshot: <em>mode, active screen id, did the screen change?, is a menu open?</em></p>
+      </div>
+      <div class="arrow">&#8594;</div>
+      <div class="node">
+        <h4>② "Should I scan?"</h4>
+        <p>Just compares numbers: <em>did the screen's id change, or has ~1s passed?</em> No tree walk to decide this.</p>
+      </div>
+      <div class="arrow">&#8594;</div>
+      <div class="node" style="border-color:rgba(180,140,255,.5)">
+        <h4 class="accent2">③ Overlays react</h4>
+        <p>If told yes → do ONE scoped scan &amp; cache the rectangles. Every other frame → just draw the cached rectangles.</p>
+      </div>
+    </div>
+
+    <div class="callout good" style="margin-top:18px">
+      <strong>The single number that means "healthy":</strong>
+      <p style="margin:8px 0 0"><span class="big good" style="font-size:30px">walks-per-frame &#8776; 0</span> &nbsp;on a screen that isn't changing. Detection is one cheap pass; everything else is reading cached rectangles.</p>
+    </div>
+  </div>
+
+  <!-- 5: KEEP vs REPLACE -->
+  <h2>5 · We do NOT start from scratch</h2>
+  <div class="grid2">
+    <div class="card">
+      <span class="pill good">KEEP — hard-won &amp; valuable</span>
+      <table>
+        <tr><td class="tick">✓</td><td>Game knowledge: which node types mean what (upgrade screen, selected-card container, etc.)</td></tr>
+        <tr><td class="tick">✓</td><td>Card measuring: rotated fan-layout math, holder anchoring</td></tr>
+        <tr><td class="tick">✓</td><td>The confirm-vs-hover distinction we just untangled</td></tr>
+        <tr><td class="tick">✓</td><td>The timing primitive (<code>ScreenEntryScanState</code>) &amp; mode service — already ~80% of the coordinator</td></tr>
+      </table>
+    </div>
+    <div class="card">
+      <span class="pill bad">STRIP — the source of fragility</span>
+      <table>
+        <tr><td class="cross">✕</td><td>Every overlay detecting game state <em>by itself</em></td></tr>
+        <tr><td class="cross">✕</td><td>Hand-rolled cache flags (these caused the PauseMenu &amp; DeckView per-frame storms)</td></tr>
+        <tr><td class="cross">✕</td><td>3+ overlapping copies of "is this the confirm phase?"</td></tr>
+        <tr><td class="cross">✕</td><td>Any full-tree walk reachable from a per-frame path</td></tr>
+      </table>
+    </div>
+  </div>
+  <p class="muted" style="margin-top:14px">A full rewrite would throw away the left column and re-hit every bug in it. Instead we <strong>consolidate</strong> — make the coordinator the single source of truth, then move overlays onto it one at a time.</p>
+
+  <!-- 6: THE PLAN -->
+  <h2>6 · The plan — and your play data is the ruler</h2>
+  <ol class="plan">
+    <li><span class="stepnum">1</span>
+      <div><strong>Instrument (your idea).</strong> Tag every tree walk with its caller + a per-frame budget alarm. Then real play data reads: <code>walk[PauseMenu] calls/frame = 1.0</code> — the storm <em>names itself</em>, instead of us guessing for hours.</div>
+    </li>
+    <li><span class="stepnum">2</span>
+      <div><strong>Build the coordinator.</strong> One per-frame snapshot (mode, active screen, changed?, menu open?) from a single cheap pass.</div>
+    </li>
+    <li><span class="stepnum">3</span>
+      <div><strong>Migrate overlays one at a time.</strong> Each moves onto the coordinator; delete its private detection. After each, confirm from your play log that walks-per-frame stayed &#8776; 0. Measured, not estimated.</div>
+    </li>
+  </ol>
+
+  <div class="callout good" style="margin-top:20px">
+    <strong>Why this ends the cycle:</strong> it replaces <em>estimation</em> (which AI is bad at — it can't see caller frequency) with <em>measurement</em> (which is exact). You'll literally watch the cost drop, overlay by overlay, in data from your own play.
+  </div>
+
+  <div class="foot">Dwell Targeting Mod · architecture model · open alongside <code>docs/overlay-scan-map.html</code></div>
+</div>
+</body>
+</html>

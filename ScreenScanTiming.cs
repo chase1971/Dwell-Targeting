@@ -6,6 +6,8 @@ namespace DwellTargeting;
 internal static class ScreenScanTiming
 {
     internal const long LayoutSettleMs = 1000;
+    internal const long CardDraftSettleMs = 400;
+    internal const long MapSettleMs = 400;
     internal const long EmptyRetryMs = 250;
-    internal const int MaxEmptyRetries = 12;
+    internal const long RescanIntervalMs = 1000;
 }

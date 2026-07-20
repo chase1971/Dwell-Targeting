@@ -41,12 +41,11 @@ internal static class CharacterSelectOverlay
         }
 
         ulong screenId = _screen.GetInstanceId();
-        if (!_entryScan.ShouldScanNow(screenId, _dwellTargets is { Count: > 0 }, out _))
+        if (!_entryScan.ShouldScan(screenId))
             return;
 
         RebuildTargets();
-        if (!_entryScan.RegisterScanResult(_dwellTargets?.Count ?? 0, "CharacterSelect"))
-            return;
+        _entryScan.MarkScanned(_dwellTargets?.Count ?? 0, "CharacterSelect");
     }
 
     internal static void CollectDwellTargets(List<DwellHoverService.Target> targets)
@@ -146,7 +145,7 @@ internal static class CharacterSelectOverlay
         if (root == null)
             return null;
 
-        foreach (var screen in NodeQuery.FindAll<NCharacterSelectScreen>(root))
+        foreach (var screen in NodeQuery.FindAllVisible<NCharacterSelectScreen>(root))
         {
             if (NodeQuery.IsLive(screen) && NodeQuery.IsVisible(screen))
                 return screen;

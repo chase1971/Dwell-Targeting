@@ -36,14 +36,11 @@ internal static class PauseMenuOverlay
         if (_lookupCached && now - _lastLookupTick < LookupRescanMs)
             return _cachedPauseMenu != null && NodeQuery.IsVisible(_cachedPauseMenu);
 
+        // Cache the negative result too — otherwise the common "no pause menu open" case re-walks the
+        // entire tree every single frame during normal play.
         _cachedPauseMenu = FindPauseMenu();
-        if (_cachedPauseMenu != null)
-        {
-            _lookupCached = true;
-            _lastLookupTick = now;
-        }
-        else
-            _lookupCached = false;
+        _lookupCached = true;
+        _lastLookupTick = now;
 
         return _cachedPauseMenu != null && NodeQuery.IsVisible(_cachedPauseMenu);
     }
@@ -139,7 +136,7 @@ internal static class PauseMenuOverlay
         if (root == null)
             return null;
 
-        foreach (var menu in NodeQuery.FindAll<NPauseMenu>(root))
+        foreach (var menu in NodeQuery.FindAllVisible<NPauseMenu>(root))
         {
             if (NodeQuery.IsLive(menu) && NodeQuery.IsVisible(menu))
                 return menu;

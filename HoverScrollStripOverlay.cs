@@ -20,6 +20,7 @@ internal static class HoverScrollStripOverlay
     private static long _nextScrollLogTick;
     private static string _tag = string.Empty;
     private static float _leftMargin = DefaultLeftMargin;
+    private const float ScrollRatePerFrame = 0.5f;
 
     internal static void Sync(string tag, float leftMargin = DefaultLeftMargin)
     {
@@ -38,6 +39,7 @@ internal static class HoverScrollStripOverlay
     {
         _tag = string.Empty;
         _scrollFrameCounter = 0;
+        HoverScrollPacer.Reset();
 
         if (_root != null && NodeQuery.IsLive(_root))
             _root.Visible = false;
@@ -52,6 +54,7 @@ internal static class HoverScrollStripOverlay
         if (mouse == null)
         {
             _scrollFrameCounter = 0;
+            HoverScrollPacer.Reset();
             return;
         }
 
@@ -61,11 +64,12 @@ internal static class HoverScrollStripOverlay
         if (!overUp && !overDown)
         {
             _scrollFrameCounter = 0;
+            HoverScrollPacer.Reset();
             return;
         }
 
         _scrollFrameCounter++;
-        if (_scrollFrameCounter % 2 != 0)
+        if (!HoverScrollPacer.TryConsumeScrollTick(ScrollRatePerFrame))
             return;
 
         MapScrollService.Scroll(overUp);

@@ -45,12 +45,7 @@ internal static class ShopOverlay
         }
 
         ulong shopId = _shopRoot.GetInstanceId();
-        bool inventoryOpen = ShopInventoryQuery.IsInventoryOpen(ResolveSearchRoot(_shopRoot));
-        bool hasValidCache = HasValidDiscovery()
-            && _cachedShopId == shopId
-            && _cachedInventoryOpen == inventoryOpen;
-
-        if (!_entryScan.ShouldScanNow(shopId, hasValidCache, out _))
+        if (!_entryScan.ShouldScan(shopId))
         {
             if (_numberedControls is { Count: > 0 })
                 SyncNumberButtons();
@@ -60,11 +55,9 @@ internal static class ShopOverlay
         }
 
         _cachedShopId = shopId;
-        _cachedInventoryOpen = inventoryOpen;
+        _cachedInventoryOpen = ShopInventoryQuery.IsInventoryOpen(ResolveSearchRoot(_shopRoot));
         Rescan(_shopRoot);
-
-        if (!_entryScan.RegisterScanResult(CountDiscoveryTargets(), "Shop"))
-            return;
+        _entryScan.MarkScanned(CountDiscoveryTargets(), "Shop");
 
         if (_numberedControls is { Count: > 0 })
             SyncNumberButtons();
@@ -136,10 +129,6 @@ internal static class ShopOverlay
         _proceedButton = null;
         _entryScan.ScheduleRescan("Shop");
     }
-
-    private static bool HasValidDiscovery() =>
-        _cardControls != null
-        && (CountDiscoveryTargets() > 0 || _proceedButton != null);
 
     private static int CountDiscoveryTargets() =>
         (_merchantButtonControls?.Count ?? 0)
@@ -372,19 +361,11 @@ internal static class ShopOverlay
         _proceedButton = FindProceedButton(searchRoot);
     }
 
-    private static Node ResolveSearchRoot(Node shopRoot)
-    {
-        var tree = Engine.GetMainLoop() as SceneTree;
-        return tree?.Root ?? shopRoot;
-    }
+    private static Node ResolveSearchRoot(Node shopRoot) => shopRoot;
 
-    private static NProceedButton? FindProceedButton(Node _)
+    private static NProceedButton? FindProceedButton(Node searchRoot)
     {
-        var tree = Engine.GetMainLoop() as SceneTree;
-        if (tree?.Root == null)
-            return null;
-
-        foreach (var button in NodeQuery.FindAll<NProceedButton>(tree.Root))
+        foreach (var button in NodeQuery.FindAllVisible<NProceedButton>(searchRoot))
         {
             if (IsSelectable(button))
                 return button;
